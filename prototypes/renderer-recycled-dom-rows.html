@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PROTOTYPE — recycled DOM rows vs canvas (issue #7)</title>
+<style>
+  :root {
+    --accent: #0ea5a4;
+    --bg: #fbfbfa;
+    --panel: #ffffff;
+    --ink: #1b1b1a;
+    --muted: #6b6b68;
+    --line: #e5e5e2;
+    --warn: #c2410c;
+    --bad: #b91c1c;
+    --ok: #15803d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 20px 24px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { margin: 0 0 6px; font-size: 17px; }
+  header .q { max-width: 900px; color: var(--muted); }
+  header .q b { color: var(--ink); }
+  .throwaway {
+    display: inline-block; margin-bottom: 8px; padding: 2px 8px; border-radius: 4px;
+    background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 600; letter-spacing: .03em;
+  }
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 0; align-items: start; }
+  .rail { padding: 16px 20px; border-right: 1px solid var(--line); }
+  .stage { padding: 16px 20px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 18px 0 8px; }
+  h2:first-child { margin-top: 0; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 0 0 12px; }
+  legend { padding: 0 6px; color: var(--muted); font-size: 12px; }
+  label.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 5px 0; }
+  button {
+    font: inherit; padding: 6px 12px; border: 1px solid var(--line); background: var(--panel);
+    border-radius: 6px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.armed { background: var(--bad); color: #fff; border-color: var(--bad); }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 6px; }
+  select, input[type=number] { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; }
+  input[type=range] { width: 150px; }
+
+  .state { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  .state dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 0; }
+  .state dt { color: var(--muted); }
+  .state dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .state dd.bad { color: var(--bad); font-weight: 600; }
+  .state dd.warn { color: var(--warn); font-weight: 600; }
+  .state dd.ok { color: var(--ok); }
+
+  /* --- the viewer under test --- */
+  #viewport {
+    position: relative; overflow: hidden; height: 594px; /* ~33 rows @ 18px */
+    background: #0f172a; color: #e2e8f0; border-radius: 8px;
+    border: 1px solid #1e293b;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px;
+    contain: strict;
+    user-select: text;
+  }
+  .hexrow {
+    position: absolute; left: 0; right: 0; top: 0; height: 18px; line-height: 18px;
+    white-space: pre; padding: 0 10px; will-change: transform;
+  }
+  .hexrow .addr { color: #64748b; }
+  .hexrow .hex  { color: #e2e8f0; }
+  .hexrow .asc  { color: #94a3b8; }
+  .hexrow.pending .hex, .hexrow.pending .asc { color: #475569; }
+  .hexrow.evenpage { background: rgba(255,255,255,0.02); }
+
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+  .tabs button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .scenario { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+  .scenario p { margin: 0 0 10px; }
+  .scenario ol { margin: 0; padding-left: 18px; }
+  .scenario li { margin: 6px 0; }
+  .hint { color: var(--muted); font-size: 13px; }
+  textarea { width: 100%; height: 60px; font-family: ui-monospace, monospace; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+  code { background: #f1f1ee; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="throwaway">PROTOTYPE — THROWAWAY — issue #7</div>
+  <h1>Recycled DOM rows vs canvas for the v1 hex renderer</h1>
+  <p class="q">
+    Plan §11 defaults to <b>recycled DOM rows</b> for v1 (canvas kept as a documented fallback).
+    This demo pushes a ~60–120 row recycled pool — repositioned with <code>transform: translateY</code>,
+    text rewritten on scroll — over a synthetic multi-GB byte source, so you can feel the two things
+    that decide the call:
+    <b>(1)</b> does it hold frame rate under sustained wheel / auto scroll, and
+    <b>(2)</b> does native text selection across recycled rows survive well enough for phase 1,
+    or does linked hex↔ascii selection + copy force a canvas + custom selection model regardless?
+    Drive it in every target browser (Chrome, Firefox; WebKit best-effort). The pure module the
+    real code keeps is <code>HexRowRenderer</code> at the bottom of this file — the frozen seam.
+  </p>
+</header>
+
+<main>
+  <div class="rail">
+    <h2>Source &amp; layout</h2>
+    <fieldset>
+      <legend>synthetic byte source — <code>byte(i) = i &amp; 0xff</code>, no allocation</legend>
+      <label class="row">size
+        <select id="size">
+          <option value="734003200">700 MB (fully-responsive tier)</option>
+          <option value="1500000000" selected>1.5 GB (degrades-ok tier)</option>
+          <option value="2000000000">2.0 GB (must-not-crash tier)</option>
+          <option value="8000000000">8 GB (way past everything)</option>
+        </select>
+      </label>
+      <label class="row">bytes / row
+        <select id="bpr">
+          <option>8</option><option selected>16</option><option>24</option><option>32</option>
+        </select>
+      </label>
+      <label class="row">pool size (rows)
+        <span><input type="range" id="pool" min="33" max="160" step="1" value="49" /> <span id="poolv">49</span></span>
+      </label>
+      <label class="row">sub-row wheel smoothing
+        <input type="checkbox" id="smooth" checked />
+      </label>
+    </fieldset>
+
+    <h2>Reads</h2>
+    <fieldset>
+      <legend>simulate the async data layer</legend>
+      <label class="row">mode
+        <select id="readmode">
+          <option value="sync" selected>sync (isolate render cost)</option>
+          <option value="async">async 64 KiB pages + placeholders</option>
+        </select>
+      </label>
+      <label class="row">page latency (ms)
+        <span><input type="range" id="lat" min="0" max="400" step="10" value="80" /> <span id="latv">80</span></span>
+      </label>
+    </fieldset>
+
+    <h2>Drive it</h2>
+    <fieldset>
+      <legend>free play — scroll the viewer with the mouse wheel too</legend>
+      <div class="btnrow">
+        <button id="slow">auto-scroll: keyboard-slow (2 rows/f)</button>
+        <button id="fast">auto-scroll: wheel-fast (45 rows/f)</button>
+        <button id="fling">fling &amp; settle</button>
+        <button id="stop" class="armed" hidden>■ stop</button>
+      </div>
+      <div class="btnrow" style="margin-top:6px">
+        <button id="jump">jump to random offset</button>
+        <button id="thrash">toggle bpr thrash</button>
+        <button id="reset">reset counters</button>
+      </div>
+    </fieldset>
+
+    <h2>Live state</h2>
+    <div class="state">
+      <dl>
+        <dt>topByteOffset</dt><dd id="s-off">0x0</dd>
+        <dt>first row / total</dt><dd id="s-rows">0 / 0</dd>
+        <dt>pool → DOM nodes</dt><dd id="s-nodes">0</dd>
+        <dt>rows repainted/s</dt><dd id="s-rps">0</dd>
+        <dt>render() cost</dt><dd id="s-rcost">0.0 ms</dd>
+        <dt>FPS (rolling)</dt><dd id="s-fps">—</dd>
+        <dt>worst frame / 1s</dt><dd id="s-worst">—</dd>
+        <dt>janky frames / 1s</dt><dd id="s-jank">0 &gt;32ms · 0 &gt;50ms</dd>
+        <dt>selection bytes</dt><dd id="s-sel">none</dd>
+        <dt>selection string</dt><dd id="s-sellen">0 chars</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div id="viewport" tabindex="0"></div>
+
+    <h2>Guided walkthroughs</h2>
+    <div class="tabs" id="tabs"></div>
+    <div class="scenario" id="scenario"></div>
+
+    <h2>Selection / copy read-back</h2>
+    <p class="hint">
+      Select inside the viewer with the mouse, then read what the browser actually captured.
+      This is the real test for whether native selection can back phase-1 copy + linked highlight.
+    </p>
+    <div class="btnrow">
+      <button id="readsel">read current selection</button>
+      <button id="clearsel">clear</button>
+    </div>
+    <p class="hint" style="margin-top:8px">Raw <code>getSelection().toString()</code>:</p>
+    <textarea id="selout" readonly placeholder="(nothing yet)"></textarea>
+    <p class="hint" style="margin-top:8px">Paste here (Ctrl/Cmd+V) to see what a copy would yield:</p>
+    <textarea id="pastebox" placeholder="paste target"></textarea>
+  </div>
+</main>
+
+<script>
+/* ============================================================================
+ * THROWAWAY PAGE SHELL. The only bit meant to survive is HexRowRenderer /
+ * DomHexRowRenderer near the bottom — that is the frozen renderer seam the
+ * ticket asks us to nail. Everything above it is a rig to feel the seam.
+ * ==========================================================================*/
+
+// ---- synthetic byte source -------------------------------------------------
+// Pure, no allocation of the whole file. read() shapes are what the real
+// ByteSource promises; here we answer them from a formula.
+function makeSyntheticSource(size, { mode, latencyMs }) {
+  const PAGE = 64 * 1024;
+  const loaded = new Set();          // page index -> present (async mode only)
+  const inflight = new Map();
+  function fillRow(offset, len, out) {
+    for (let i = 0; i < len; i++) out[i] = (offset + i) & 0xff;
+  }
+  return {
+    size,
+    // synchronous read: null in async mode when any covering page is missing
+    readSync(offset, len) {
+      len = Math.max(0, Math.min(len, size - offset));
+      if (mode === 'async') {
+        const p0 = (offset / PAGE) | 0, p1 = ((offset + len - 1) / PAGE) | 0;
+        for (let p = p0; p <= p1; p++) {
+          if (!loaded.has(p)) { this._want(p); return null; }
+        }
+      }
+      const out = new Uint8Array(len);
+      fillRow(offset, len, out);
+      return out;
+    },
+    _want(p) {
+      if (inflight.has(p) || loaded.has(p)) return;
+      const id = setTimeout(() => { inflight.delete(p); loaded.add(p); }, latencyMs);
+      inflight.set(p, id);
+    },
+    setMode(m, lat) { mode = m; latencyMs = lat; if (m === 'sync') { loaded.clear(); inflight.forEach(clearTimeout); inflight.clear(); } },
+  };
+}
+
+// ---- viewport math (mirror of the real viewport.ts, pure) -----------------
+// scrollPx is a private float accumulator; it is NEVER written to the DOM,
+// which is the whole point (94 M rows * 18px overflows every engine).
+function makeViewportMath(rowHeightPx) {
+  return {
+    rowHeightPx,
+    totalRows(size, bpr) { return Math.ceil(size / bpr); },
+    maxScrollPx(size, bpr, viewportH) {
+      return Math.max(0, (Math.ceil(size / bpr) - Math.floor(viewportH / rowHeightPx)) * rowHeightPx);
+    },
+    firstVisibleRow(scrollPx) { return Math.floor(scrollPx / rowHeightPx); },
+    subRowPx(scrollPx) { return scrollPx - Math.floor(scrollPx / rowHeightPx) * rowHeightPx; },
+    visibleRows(viewportH) { return Math.ceil(viewportH / rowHeightPx) + 1; },
+  };
+}
+
+// ---- format (mirror of format.ts) ---------------------------------------
+const HEXB = Array.from({ length: 256 }, (_, b) => b.toString(16).toUpperCase().padStart(2, '0'));
+function toAddress(off, width) { return off.toString(16).toUpperCase().padStart(width, '0'); }
+function asciiChar(b) { return (b >= 0x20 && b <= 0x7e) ? String.fromCharCode(b) : '.'; }
+
+/* ============================================================================
+ * RIG STATE + LOOP
+ * ==========================================================================*/
+const vp = document.getElementById('viewport');
+const RH = 18;
+const math = makeViewportMath(RH);
+
+let size = 1500000000;
+let bpr = 16;
+let poolSize = 49;
+let smooth = true;
+let readmode = 'sync';
+let latencyMs = 80;
+
+let scrollPx = 0;
+let auto = null;            // {mode:'slow'|'fast'|'fling', v:number}
+let thrash = false, thrashT = 0;
+let source = makeSyntheticSource(size, { mode: readmode, latencyMs });
+let renderer = null;
+
+// perf counters
+let frames = [];           // {t, dt} within last 1000ms
+let repaints = [];         // t of each row text rewrite within last 1000ms
+let lastRenderCost = 0;
+let emaDt = 16.7;
+
+function rebuildSource() {
+  source = makeSyntheticSource(size, { mode: readmode, latencyMs });
+}
+
+function readRow(docRow) {
+  const offset = docRow * bpr;
+  const len = Math.min(bpr, size - offset);
+  if (len <= 0) return { offset, bytes: new Uint8Array(0) };
+  const bytes = source.readSync(offset, len);
+  return { offset, bytes }; // bytes === null => pending
+}
+
+let needsRender = true;
+function frame(t) {
+  requestAnimationFrame(frame);
+  const prev = frame._t || t;
+  frame._t = t;
+  const dt = t - prev;
+  emaDt = emaDt * 0.9 + dt * 0.1;
+  frames.push({ t, dt });
+  const cut = t - 1000;
+  while (frames.length && frames[0].t < cut) frames.shift();
+  while (repaints.length && repaints[0] < cut) repaints.shift();
+
+  // bpr thrash
+  if (thrash && t - thrashT > 450) {
+    thrashT = t;
+    const presets = [8, 16, 24, 32];
+    setBpr(presets[(presets.indexOf(bpr) + 1) % presets.length], true);
+  }
+
+  // auto-scroll advance
+  if (auto) {
+    const max = math.maxScrollPx(size, bpr, vp.clientHeight);
+    if (auto.mode === 'fling') {
+      scrollPx = Math.min(max, Math.max(0, scrollPx + auto.v));
+      auto.v *= 0.94;
+      if (Math.abs(auto.v) < 0.4) stopAuto();
+    } else {
+      const step = (auto.mode === 'slow' ? 2 : 45) * RH * (dt / 16.7);
+      scrollPx += step;
+      if (scrollPx >= max) { scrollPx = max; stopAuto(); }
+    }
+    needsRender = true;
+  }
+
+  if (needsRender && renderer) {
+    needsRender = false;
+    const firstRow = math.firstVisibleRow(scrollPx);
+    const sub = smooth ? math.subRowPx(scrollPx) : 0;
+    const totalRows = math.totalRows(size, bpr);
+    const c0 = performance.now();
+    const painted = renderer.render({
+      firstVisibleRow: firstRow,
+      subRowPx: sub,
+      poolSize,
+      bytesPerRow: bpr,
+      totalRows,
+      addrWidth: Math.max(8, size.toString(16).length),
+      read: readRow,
+    });
+    lastRenderCost = performance.now() - c0;
+    for (let i = 0; i < painted; i++) repaints.push(t);
+  }
+
+  paintState();
+}
+requestAnimationFrame(frame);
+
+// keep repainting while async pages land
+setInterval(() => { if (readmode === 'async') needsRender = true; }, 60);
+
+/* ---- state panel ---- */
+function paintState() {
+  const firstRow = math.firstVisibleRow(scrollPx);
+  const totalRows = math.totalRows(size, bpr);
+  const off = firstRow * bpr;
+  document.getElementById('s-off').textContent = '0x' + off.toString(16).toUpperCase() + '  (' + off.toLocaleString() + ')';
+  document.getElementById('s-rows').textContent = firstRow.toLocaleString() + ' / ' + totalRows.toLocaleString();
+  document.getElementById('s-nodes').textContent = vp.childElementCount + ' nodes';
+  document.getElementById('s-rps').textContent = repaints.length.toLocaleString();
+  document.getElementById('s-rcost').textContent = lastRenderCost.toFixed(2) + ' ms';
+
+  const fps = 1000 / emaDt;
+  const fpsEl = document.getElementById('s-fps');
+  fpsEl.textContent = fps.toFixed(0);
+  fpsEl.className = fps > 55 ? 'ok' : fps > 40 ? 'warn' : 'bad';
+
+  let worst = 0;
+  for (const f of frames) if (f.dt > worst) worst = f.dt;
+  const worstEl = document.getElementById('s-worst');
+  worstEl.textContent = worst.toFixed(1) + ' ms';
+  worstEl.className = worst < 20 ? 'ok' : worst < 40 ? 'warn' : 'bad';
+
+  const o32 = frames.filter(f => f.dt > 32).length;
+  const o50 = frames.filter(f => f.dt > 50).length;
+  const jEl = document.getElementById('s-jank');
+  jEl.textContent = o32 + ' >32ms · ' + o50 + ' >50ms';
+  jEl.className = o50 > 0 ? 'bad' : o32 > 0 ? 'warn' : 'ok';
+}
+
+/* ---- selection read-back ---- */
+function readSelection() {
+  const sel = window.getSelection();
+  const str = sel ? sel.toString() : '';
+  document.getElementById('selout').value = str || '(empty)';
+  document.getElementById('s-sellen').textContent = str.length.toLocaleString() + ' chars';
+
+  // try to derive a byte range from the seam
+  const range = renderer && renderer.getSelectedByteRange ? renderer.getSelectedByteRange() : null;
+  document.getElementById('s-sel').textContent = range
+    ? ('0x' + range.start.toString(16).toUpperCase() + '–0x' + range.end.toString(16).toUpperCase() + ' (' + (range.end - range.start + 1) + ' B)')
+    : 'native selection does not map cleanly';
+}
+document.addEventListener('selectionchange', () => {
+  const sel = window.getSelection();
+  const n = sel ? sel.toString().length : 0;
+  document.getElementById('s-sellen').textContent = n.toLocaleString() + ' chars';
+});
+
+/* ---- controls ---- */
+function setBpr(v, keepOffset) {
+  const anchor = math.firstVisibleRow(scrollPx) * bpr;
+  bpr = v;
+  document.getElementById('bpr').value = String(v);
+  if (keepOffset) scrollPx = Math.floor(anchor / bpr) * RH;
+  needsRender = true;
+}
+function stopAuto() { auto = null; document.getElementById('stop').hidden = true; }
+function startAuto(mode) {
+  if (mode === 'fling') auto = { mode, v: 260 };
+  else auto = { mode, v: 0 };
+  document.getElementById('stop').hidden = false;
+  vp.focus();
+}
+
+document.getElementById('size').onchange = e => { size = +e.target.value; scrollPx = 0; rebuildSource(); needsRender = true; };
+document.getElementById('bpr').onchange = e => setBpr(+e.target.value, true);
+document.getElementById('pool').oninput = e => { poolSize = +e.target.value; document.getElementById('poolv').textContent = e.target.value; renderer.setPool(poolSize); needsRender = true; };
+document.getElementById('smooth').onchange = e => { smooth = e.target.checked; needsRender = true; };
+document.getElementById('readmode').onchange = e => { readmode = e.target.value; rebuildSource(); needsRender = true; };
+document.getElementById('lat').oninput = e => { latencyMs = +e.target.value; document.getElementById('latv').textContent = e.target.value; rebuildSource(); };
+document.getElementById('slow').onclick = () => startAuto('slow');
+document.getElementById('fast').onclick = () => startAuto('fast');
+document.getElementById('fling').onclick = () => startAuto('fling');
+document.getElementById('stop').onclick = stopAuto;
+document.getElementById('jump').onclick = () => {
+  const max = math.maxScrollPx(size, bpr, vp.clientHeight);
+  scrollPx = Math.random() * max; needsRender = true;
+};
+document.getElementById('thrash').onclick = e => { thrash = !thrash; e.target.classList.toggle('primary', thrash); };
+document.getElementById('reset').onclick = () => { frames = []; repaints = []; };
+document.getElementById('readsel').onclick = readSelection;
+document.getElementById('clearsel').onclick = () => { window.getSelection().removeAllRanges(); readSelection(); };
+
+vp.addEventListener('wheel', e => {
+  e.preventDefault();
+  const max = math.maxScrollPx(size, bpr, vp.clientHeight);
+  scrollPx = Math.min(max, Math.max(0, scrollPx + e.deltaY));
+  needsRender = true;
+}, { passive: false });
+vp.addEventListener('keydown', e => {
+  const max = math.maxScrollPx(size, bpr, vp.clientHeight);
+  const k = { ArrowDown: RH, ArrowUp: -RH, PageDown: vp.clientHeight - RH, PageUp: -(vp.clientHeight - RH) }[e.key];
+  if (k == null) return;
+  e.preventDefault();
+  scrollPx = Math.min(max, Math.max(0, scrollPx + k));
+  needsRender = true;
+});
+
+/* ============================================================================
+ * THE SEAM  —  this is the liftable module.
+ *
+ * HexRowRenderer: the data layer hands it a view (which rows, how wide, a
+ * synchronous read()) once per frame; nothing flows back except a byte range
+ * derived from the user's native selection. A CanvasHexRenderer must satisfy
+ * exactly this surface with zero data-layer changes.
+ *
+ *   mount(container)                    attach to the DOM
+ *   setPool(n)                          resize the recycled pool
+ *   render(view) -> paintedRowCount     paint one frame; view = {
+ *        firstVisibleRow, subRowPx, poolSize, bytesPerRow, totalRows,
+ *        addrWidth, read(docRow) -> { offset, bytes: Uint8Array | null } }
+ *   getSelectedByteRange() -> {start,end} | null
+ *   destroy()
+ * ==========================================================================*/
+class DomHexRowRenderer {
+  constructor() { this.pool = []; this.container = null; this._n = 0; }
+  mount(container) {
+    this.container = container;
+    container.innerHTML = '';
+    this.setPool(49);
+  }
+  setPool(n) {
+    this._n = n;
+    while (this.pool.length < n) {
+      const el = document.createElement('div');
+      el.className = 'hexrow';
+      el.innerHTML = '<span class="addr"></span> <span class="hex"></span>  <span class="asc"></span>';
+      el._addr = el.children[0]; el._hex = el.children[1]; el._asc = el.children[2];
+      el._docRow = -1;
+      this.container.appendChild(el);
+      this.pool.push(el);
+    }
+    while (this.pool.length > n) this.container.removeChild(this.pool.pop());
+  }
+  render(view) {
+    const { firstVisibleRow, subRowPx, bytesPerRow, totalRows, addrWidth, read } = view;
+    const overscanTop = Math.floor((this._n - Math.ceil(this.container.clientHeight / 18)) / 2);
+    const baseRow = firstVisibleRow - Math.max(0, overscanTop);
+    let painted = 0;
+    for (let k = 0; k < this._n; k++) {
+      const el = this.pool[k];
+      const docRow = baseRow + k;
+      if (docRow < 0 || docRow >= totalRows) { el.hidden = true; el._docRow = -1; continue; }
+      el.hidden = false;
+      // transform every frame — cheap, compositor-only
+      el.style.transform = 'translateY(' + (k * 18 - subRowPx) + 'px)';
+      if (el._docRow === docRow && !el._pending) continue; // slot already correct
+      el._docRow = docRow;
+      const { offset, bytes } = read(docRow);
+      el._addr.textContent = toAddress(offset, addrWidth);
+      el._pageEven = ((offset / 65536) | 0) % 2 === 0;
+      el.classList.toggle('evenpage', el._pageEven);
+      if (bytes === null) {
+        el.classList.add('pending'); el._pending = true;
+        el._hex.textContent = '·· '.repeat(bytesPerRow).trimEnd();
+        el._asc.textContent = '·'.repeat(bytesPerRow);
+      } else {
+        el.classList.remove('pending'); el._pending = false;
+        let h = '', a = '';
+        for (let i = 0; i < bytes.length; i++) { h += HEXB[bytes[i]] + ' '; a += asciiChar(bytes[i]); }
+        el._hex.textContent = h.trimEnd();
+        el._asc.textContent = a;
+      }
+      painted++;
+    }
+    return painted;
+  }
+  // Native selection -> byte range. This is deliberately best-effort: it shows
+  // how far native selection actually gets you before a custom model is needed.
+  getSelectedByteRange() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    const rowOf = node => {
+      let el = node.nodeType === 3 ? node.parentElement : node;
+      while (el && !el.classList?.contains('hexrow')) el = el.parentElement;
+      return el && el._docRow >= 0 ? el._docRow : null;
+    };
+    const a = rowOf(sel.anchorNode), b = rowOf(sel.focusNode);
+    if (a == null || b == null) return null;               // selection left the pool
+    const r0 = Math.min(a, b), r1 = Math.max(a, b);
+    // row granularity only — column offset within a row is not recoverable from
+    // native selection without walking text nodes per span; that gap is the point.
+    return { start: r0 * this._bpr0(), end: (r1 + 1) * this._bpr0() - 1 };
+  }
+  _bpr0() { return +document.getElementById('bpr').value; }
+  destroy() { if (this.container) this.container.innerHTML = ''; this.pool = []; }
+}
+
+renderer = new DomHexRowRenderer();
+renderer.mount(vp);
+renderer.setPool(poolSize);
+needsRender = true;
+
+/* ============================================================================
+ * WALKTHROUGHS
+ * ==========================================================================*/
+const SCENARIOS = [
+  {
+    name: '1 · Sustained fast wheel',
+    body: `The worst realistic case: user spins the wheel and holds it. Recycled rows
+           rewrite their text every frame. Watch <b>worst frame / 1s</b> and <b>janky frames</b>.
+           Verdict signal: if >50ms frames appear on the fully-responsive tier (700 MB), DOM rows
+           are already in trouble.`,
+    steps: [
+      ['set 700 MB', () => { document.getElementById('size').value = '734003200'; document.getElementById('size').onchange({ target: { value: '734003200' } }); }],
+      ['reset counters', () => document.getElementById('reset').onclick()],
+      ['auto-scroll fast (10s)', () => { startAuto('fast'); setTimeout(stopAuto, 10000); }],
+      ['now try 1.5 GB', () => { document.getElementById('size').value = '1500000000'; document.getElementById('size').onchange({ target: { value: '1500000000' } }); document.getElementById('reset').onclick(); startAuto('fast'); setTimeout(stopAuto, 10000); }],
+    ],
+  },
+  {
+    name: '2 · Held keyboard arrow',
+    body: `Row-at-a-time nav — the common case. Click into the viewer first. This should be
+           <b>rock solid</b> at 60fps on every tier; if it is not, the renderer is doing too much
+           per row.`,
+    steps: [
+      ['focus viewer', () => vp.focus()],
+      ['auto-scroll slow (2 rows/f)', () => startAuto('slow')],
+      ['stop', () => stopAuto()],
+    ],
+  },
+  {
+    name: '3 · Fling & settle',
+    body: `Momentum scroll. Big jump in <code>firstVisibleRow</code>, then decel. Every slot's
+           text is replaced at least once. Look for a single fat frame at the moment of the jump.`,
+    steps: [
+      ['reset counters', () => document.getElementById('reset').onclick()],
+      ['fling', () => startAuto('fling')],
+      ['fling again', () => startAuto('fling')],
+    ],
+  },
+  {
+    name: '4 · bytesPerRow thrash while scrolling',
+    body: `Cycles 8→16→24→32 every ~450ms. Every change re-lays every row (column count
+           changes) and re-anchors the offset. Combined with scrolling this is the layout
+           worst case. Watch <b>render() cost</b>.`,
+    steps: [
+      ['start slow scroll', () => startAuto('slow')],
+      ['toggle bpr thrash', () => document.getElementById('thrash').onclick({ target: document.getElementById('thrash') })],
+      ['stop thrash', () => document.getElementById('thrash').onclick({ target: document.getElementById('thrash') })],
+      ['stop scroll', () => stopAuto()],
+    ],
+  },
+  {
+    name: '5 · Select across recycled rows',
+    body: `The selection question. Drag-select from the top visible row down past the bottom
+           of the viewer (force an autoscroll during the drag if you can). Then click
+           <b>read current selection</b>. Watch: does the string include the address gutter and
+           BOTH hex + ascii panes mashed together? Does the byte range come back
+           <i>row-granular only</i>? Now scroll away with the wheel and read again — the anchor
+           row has been recycled out.`,
+    steps: [
+      ['jump to mid-file', () => document.getElementById('jump').onclick()],
+      ['(now drag-select in the viewer by hand)', () => vp.focus()],
+      ['read current selection', () => readSelection()],
+      ['scroll away 300 rows', () => { scrollPx += 300 * RH; needsRender = true; }],
+      ['read selection again', () => readSelection()],
+    ],
+  },
+  {
+    name: '6 · Copy a selection',
+    body: `Select some rows by hand, press <b>Ctrl/Cmd+C</b>, then click into the paste box and
+           paste. Compare what landed with what you would want copied (raw hex, or raw text).
+           This is what native copy gives phase 1 for free — decide if it is enough.`,
+    steps: [
+      ['(select by hand, then Ctrl/Cmd+C)', () => vp.focus()],
+      ['focus paste box', () => document.getElementById('pastebox').focus()],
+    ],
+  },
+];
+
+const tabsEl = document.getElementById('tabs');
+const scEl = document.getElementById('scenario');
+let activeTab = 0;
+function drawTabs() {
+  tabsEl.innerHTML = '';
+  SCENARIOS.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.textContent = s.name;
+    b.className = i === activeTab ? 'active' : '';
+    b.onclick = () => { activeTab = i; drawTabs(); drawScenario(); };
+    tabsEl.appendChild(b);
+  });
+}
+function drawScenario() {
+  const s = SCENARIOS[activeTab];
+  scEl.innerHTML = '<p>' + s.body + '</p>';
+  const ol = document.createElement('ol');
+  s.steps.forEach(([label, fn]) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = fn;
+    li.appendChild(b);
+    ol.appendChild(li);
+  });
+  scEl.appendChild(ol);
+}
+drawTabs(); drawScenario();
+</script>
+</body>
+</html>
