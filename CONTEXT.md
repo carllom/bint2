@@ -44,6 +44,12 @@ stay answerable; nothing else ever will be. Distinct from closing, which the
 reader does on purpose by opening another document.
 _Avoid_: closed, lost, broken, error state
 
+**Viewport**:
+The bounded window of the document that is on screen — the rows shown right now,
+and the position that fixes which rows those are. Never the document: it holds
+tens of rows of a document that may hold millions.
+_Avoid_: view, window, screen, grid
+
 **Selection**:
 The one range of bytes the reader has marked right now. There is never more than
 one, the next click replaces it, and it does not survive the document being
