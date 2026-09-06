@@ -63,7 +63,12 @@ interface ByteSource {
   posted as `{ reqId, ok: false, code, message }` and reconstructed on the main
   thread, because structured clone preserves an `Error`'s name/message/stack but
   **not** subclass identity — a `ByteSourceError` posted from a worker would arrive
-  as a plain `Error` and `instanceof` would break.
+  as a plain `Error` and `instanceof` would break. **`source-gone` latches**: once
+  a read fails this way, `FileByteSource` enters a terminal state where subsequent
+  reads reject immediately without touching the disk and `readSync` returns null.
+  Without the latch, the page cache's no-negative-caching rule
+  ([ADR-0002](./0002-page-cache-sized-against-the-viewport.md)) would retry a
+  doomed `slice()` on every frame.
 
 ## Scope of the freeze
 
