@@ -36,3 +36,20 @@ _Avoid_: cached, loaded, warm
 A read too large to serve as pages, satisfied straight from the document and
 leaving nothing resident behind it.
 _Avoid_: bypass, streaming read
+
+**Selection**:
+The one range of bytes the reader has marked right now. There is never more than
+one, the next click replaces it, and it does not survive the document being
+closed.
+_Avoid_: highlight, marked range, region
+
+**Cursor**:
+The selection when it spans no bytes — the single position keyboard navigation
+moves. Not a second concept alongside the selection; the same thing, collapsed.
+_Avoid_: caret, insertion point, focus
+
+**Annotation**:
+A range of bytes that carries meaning of its own — a highlight, a comment — and
+stays put while the reader goes on selecting elsewhere. Many can exist at once.
+Out of scope for phase 1, named here so that it never gets called a selection.
+_Avoid_: selected range, highlight, marker, tag
