@@ -68,7 +68,12 @@ interface ByteSource {
   reads reject immediately without touching the disk and `readSync` returns null.
   Without the latch, the page cache's no-negative-caching rule
   ([ADR-0002](./0002-page-cache-sized-against-the-viewport.md)) would retry a
-  doomed `slice()` on every frame.
+  doomed `slice()` on every frame. The latch is **source-level only**: `readSync`
+  returning null here is `FileByteSource`'s, and `PageCache` — which never sees a
+  `File` — keeps serving its resident pages after the source dies. That layering
+  is load-bearing rather than an oversight, and
+  [ADR-0004](./0004-a-dead-source-is-a-banner-not-a-blank-screen.md) depends on
+  it: the view keeps the bytes it already had.
 
 ## Scope of the freeze
 

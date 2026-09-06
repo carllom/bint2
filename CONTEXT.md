@@ -37,6 +37,13 @@ A read too large to serve as pages, satisfied straight from the document and
 leaving nothing resident behind it.
 _Avoid_: bypass, streaming read
 
+**Dead source**:
+A document whose bytes can no longer be fetched, permanently — the file moved or
+was truncated out from under the open document. Bytes that are already resident
+stay answerable; nothing else ever will be. Distinct from closing, which the
+reader does on purpose by opening another document.
+_Avoid_: closed, lost, broken, error state
+
 **Selection**:
 The one range of bytes the reader has marked right now. There is never more than
 one, the next click replaces it, and it does not survive the document being
