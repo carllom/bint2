@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prototype — viewport.ts scrollbar & coordinate model</title>
+<style>
+  :root {
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --ink: #1f2330;
+    --ink-soft: #5b6172;
+    --line: #e3e5ec;
+    --bg: #fbfbfd;
+    --warn: #b45309;
+    --warn-soft: #fef3c7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 28px 96px; }
+  h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); margin: 34px 0 12px; }
+  p { margin: 0 0 12px; }
+  .lede { color: var(--ink-soft); max-width: 68ch; }
+  .settled {
+    background: var(--accent-soft);
+    border: 1px solid #d7dcfb;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 16px 0 0;
+    font-size: 13.5px;
+  }
+  .settled b { color: var(--accent); }
+  code { font-family: "SF Mono", "JetBrains Mono", "Consolas", ui-monospace, monospace; font-size: 0.92em; }
+
+  .stage { display: grid; grid-template-columns: 1fr 320px; gap: 22px; margin-top: 8px; align-items: start; }
+  @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+
+  /* fake hex viewport */
+  .viewer {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    overflow: hidden;
+    display: flex;
+  }
+  .rows {
+    flex: 1;
+    font-family: "SF Mono", "JetBrains Mono", "Consolas", ui-monospace, monospace;
+    font-size: 12.5px;
+    padding: 8px 0;
+    user-select: none;
+  }
+  .row { display: flex; gap: 18px; padding: 1px 14px; white-space: pre; }
+  .row .addr { color: var(--accent); }
+  .row .hex { color: var(--ink); }
+  .row .asc { color: var(--ink-soft); }
+  .row.first { background: var(--accent-soft); }
+  .row.last-full { box-shadow: inset 0 -1px 0 var(--line); }
+
+  /* custom scrollbar */
+  .sb-outer { width: 20px; background: #f2f3f7; border-left: 1px solid var(--line); position: relative; touch-action: none; }
+  .sb-thumb {
+    position: absolute; left: 3px; right: 3px;
+    background: #b9bdd0; border-radius: 7px; cursor: grab;
+    min-height: 8px;
+  }
+  .sb-thumb:active { cursor: grabbing; background: var(--accent); }
+
+  /* two-level zoom band */
+  .zoom { margin-top: 14px; border: 1px dashed #c9a4f5; border-radius: 10px; padding: 12px 14px; background: #faf5ff; }
+  .zoom.hidden { display: none; }
+  .zoom h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #7c3aed; }
+  .zband { position: relative; height: 26px; background: #f0e6fe; border-radius: 6px; touch-action: none; }
+  .zthumb { position: absolute; top: 3px; bottom: 3px; background: #a855f7; border-radius: 5px; cursor: grab; }
+  .zoom .hint { font-size: 12px; color: var(--ink-soft); margin: 8px 0 0; }
+
+  /* state panel */
+  .panel { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 14px 16px; font-size: 13px; }
+  .panel h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-family: "SF Mono","JetBrains Mono","Consolas",ui-monospace,monospace; font-size: 12px; }
+  .kv dt { color: var(--ink-soft); }
+  .kv dd { margin: 0; text-align: right; }
+  .kv dd.em { color: var(--accent); }
+  .changed { margin-top: 12px; padding: 8px 10px; background: var(--accent-soft); border-radius: 6px; font-size: 12px; min-height: 34px; }
+  .changed b { color: var(--accent); }
+  .warnrow { color: var(--warn); background: var(--warn-soft); }
+
+  /* buttons */
+  .group { margin-top: 14px; }
+  .group h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
+  button {
+    font: inherit; font-size: 13px;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+    border-radius: 7px; padding: 6px 11px; cursor: pointer;
+  }
+  button:hover { border-color: #b9bdd0; }
+  button.accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  input[type=text], select {
+    font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  }
+  input[type=text] { width: 150px; font-family: "SF Mono","Consolas",ui-monospace,monospace; }
+
+  /* walkthroughs */
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 0; }
+  .tab { border: 1px solid var(--line); border-bottom: none; background: #f2f3f7; border-radius: 8px 8px 0 0; padding: 7px 12px; font-size: 12.5px; cursor: pointer; }
+  .tab.active { background: #fff; font-weight: 600; color: var(--accent); position: relative; top: 1px; }
+  .scenario { border: 1px solid var(--line); border-top: none; border-radius: 0 0 10px 10px; padding: 16px 18px; background: #fff; }
+  .scenario p { max-width: 74ch; }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .steps button { position: relative; }
+  .steps button.done { opacity: 0.45; text-decoration: line-through; }
+  .steps button.next { box-shadow: 0 0 0 2px var(--accent-soft); border-color: var(--accent); }
+  .verdict { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #f2f3f7; font-size: 13px; }
+  .verdict b { color: var(--accent); }
+  .foot { margin-top: 40px; color: var(--ink-soft); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Prototype — <code>viewport.ts</code> scrollbar &amp; coordinate model</h1>
+  <p class="lede">
+    Ticket <b>“Scrollbar &amp; coordinate model at ~94&nbsp;M rows”</b> (#8). The Phase&nbsp;1 hex viewer has no
+    native scrollbar — the document is up to ~125&nbsp;M rows, far past every browser’s element-height limit — so
+    scroll position is a pure <code>topByteOffset</code> value and a hand-drawn thumb. This page lets you
+    <b>drive that model by hand at real scale</b> and feel where it breaks.
+  </p>
+  <p class="lede"><b>The question being prototyped:</b> at multi-GB scale one thumb-pixel is hundreds of
+    thousands of rows, so dragging the thumb can never land on a chosen offset. Is that acceptable because
+    <i>wheel + keyboard + Goto</i> carry all the fine movement (confirm §11), or does Phase&nbsp;1 need the
+    two-level “zoom” scrollbar that §12 floats? And does the pure-function surface below survive the awkward
+    cases well enough to <b>freeze</b> it for <code>viewport.ts</code>?</p>
+
+  <div class="settled">
+    <b>Already settled, not in scope here:</b> part (a) “custom thumb vs. hybrid native scrollbar below a size
+    threshold” was closed by <b>“Max file-size target for phase 1”</b> (#2) — the custom <code>VirtualScrollbar</code>
+    is the only scrollbar at every file size, no native fallback, no hybrid. This prototype only exercises the
+    custom model.
+  </div>
+
+  <h2>The model under test</h2>
+  <p class="lede">Everything below is driven by one throwaway module (<code>Viewport</code>, in this file’s
+    <code>&lt;script&gt;</code>) written as the pure-function set the ticket wants to freeze:
+    <code>rowOfOffset</code>, <code>offsetOfRow</code>, <code>rowCount</code>, <code>visibleRows</code>,
+    <code>maxFirstRow</code>, <code>clampTopOffset</code>, <code>thumbGeometry</code>,
+    <code>offsetFromThumbPixel</code>, plus the <code>bytesPerRow</code>-change offset rule. If the walkthroughs
+    pass, this surface lifts into <code>src/core/viewport.ts</code> unchanged.</p>
+
+  <div class="stage">
+    <div>
+      <div class="viewer">
+        <div class="rows" id="rows"></div>
+        <div class="sb-outer" id="sbOuter"><div class="sb-thumb" id="sbThumb"></div></div>
+      </div>
+
+      <div class="zoom hidden" id="zoom">
+        <h3>Two-level “zoom” scrollbar (candidate mechanism for part b)</h3>
+        <div class="zband" id="zband"><div class="zthumb" id="zthumb"></div></div>
+        <p class="hint">This band spans only <b><span id="zoomSpan">?</span> rows</b> centred on the current
+          position, so its pixels are finer. Drag it, then re-centre with “Re-centre zoom” and drag again —
+          count how many drag-and-recentre cycles it takes to reach a specific offset versus one Goto.</p>
+        <div class="btnrow" style="margin-top:8px">
+          <button data-act="zoomDrag:-8">◂ zoom −8px</button>
+          <button data-act="zoomDrag:-1">◂ −1px</button>
+          <button data-act="zoomDrag:1">+1px ▸</button>
+          <button data-act="zoomDrag:8">zoom +8px ▸</button>
+          <button data-act="zoomRecentre">Re-centre zoom</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>Free play — press in any order</h3>
+        <div class="btnrow">
+          <button data-act="rows:-1">↑ arrow (−1 row)</button>
+          <button data-act="rows:1">↓ arrow (+1 row)</button>
+          <button data-act="wheel:-3">wheel −3</button>
+          <button data-act="wheel:3">wheel +3</button>
+          <button data-act="page:-1">PageUp</button>
+          <button data-act="page:1">PageDn</button>
+          <button data-act="home">Ctrl+Home</button>
+          <button data-act="end">Ctrl+End</button>
+        </div>
+        <div class="btnrow" style="margin-top:6px">
+          <button data-act="drag:-10">drag thumb −10px</button>
+          <button data-act="drag:-1">drag −1px</button>
+          <button data-act="drag:1">drag +1px</button>
+          <button data-act="drag:10">drag thumb +10px</button>
+          <span style="color:var(--ink-soft);font-size:12px">…or grab the real thumb above</span>
+        </div>
+        <div class="btnrow" style="margin-top:6px">
+          <input type="text" id="gotoInput" placeholder="0x2A000000 or 704643072" />
+          <button class="accent" data-act="goto">Goto</button>
+        </div>
+        <div class="btnrow" style="margin-top:6px">
+          bytes/row:
+          <button data-act="bpr:8">8</button>
+          <button data-act="bpr:16">16</button>
+          <button data-act="bpr:24">24</button>
+          <button data-act="bpr:32">32</button>
+        </div>
+        <div class="btnrow" style="margin-top:6px">
+          file size:
+          <button data-act="size:700MB">700 MB</button>
+          <button data-act="size:2GB">2 GB</button>
+          <button data-act="size:8GB">8 GB</button>
+          <button data-act="size:MAXSAFE">MAX_SAFE probe</button>
+        </div>
+        <div class="btnrow" style="margin-top:6px">
+          <button id="zoomToggle" data-act="toggleZoom">Show two-level zoom scrollbar</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Current state</h3>
+      <dl class="kv" id="kv"></dl>
+      <div class="changed" id="changed">Drive the model — the last change shows here.</div>
+    </div>
+  </div>
+
+  <h2>Guided walkthroughs</h2>
+  <div class="tabs" id="tabs"></div>
+  <div class="scenario" id="scenario"></div>
+
+  <div class="foot">
+    Throwaway. Lives at <code>src/core/__prototype__/viewport-scrollbar.prototype.html</code>, kept on branch
+    <code>prototype/viewport-scrollbar-model</code>. The validated pure-function surface is what moves into
+    <code>src/core/viewport.ts</code>; this shell does not ship.
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// Viewport — throwaway pure module. NO DOM, NO document access in here.
+// This is the bit that lifts into src/core/viewport.ts if the walkthroughs pass.
+// State shape:
+//   { size, bytesPerRow, topByteOffset, trackPx, viewportPx, rowPx, minThumbPx }
+// size/topByteOffset are byte counts and MAY exceed 2^32. All products are kept
+// under 2^53 by dividing before multiplying (see thumbGeometry).
+// ============================================================================
+const Viewport = (() => {
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(n, hi));
+
+  const rowOfOffset  = (offset, bpr) => Math.floor(offset / bpr);
+  const offsetOfRow  = (row, bpr)    => row * bpr;
+  const rowCount     = (s) => Math.ceil(s.size / s.bytesPerRow);
+  const visibleRows  = (s) => Math.max(1, Math.floor(s.viewportPx / s.rowPx));
+  const maxFirstRow  = (s) => Math.max(0, rowCount(s) - visibleRows(s));
+
+  // Align an arbitrary byte offset down to a row boundary, then clamp so the
+  // last screen can't scroll past EOF. Used by every action that sets position.
+  const clampTopOffset = (offset, s) => {
+    const bpr = s.bytesPerRow;
+    const aligned = offset - (offset % bpr);
+    const maxTop = maxFirstRow(s) * bpr;          // <= size, safe
+    return clamp(aligned, 0, maxTop);
+  };
+
+  // Thumb size & position, in track pixels. minThumbPx wins when the exact
+  // fraction would be sub-pixel (it always is past a few hundred MB).
+  const thumbGeometry = (s) => {
+    const rc = rowCount(s), vr = visibleRows(s), mfr = maxFirstRow(s);
+    let thumbH = Math.round(s.trackPx * (vr / rc));     // vr/rc in [0,1]
+    thumbH = clamp(thumbH, s.minThumbPx, s.trackPx);
+    const travel = s.trackPx - thumbH;
+    const fr = rowOfOffset(s.topByteOffset, s.bytesPerRow);
+    // divide-first: (travel * fr) would blow past 2^53 at multi-GB scale
+    const thumbY = mfr <= 0 ? 0 : Math.round(travel * (fr / mfr));
+    return { thumbH, thumbY, travel, trackPx: s.trackPx };
+  };
+
+  // Inverse of thumbGeometry: a pixel position of the thumb top -> topByteOffset.
+  const offsetFromThumbPixel = (thumbTopPx, s) => {
+    const { travel } = thumbGeometry(s);
+    const frac = travel <= 0 ? 0 : clamp(thumbTopPx / travel, 0, 1);
+    const firstRow = Math.round(frac * maxFirstRow(s));  // frac in [0,1] -> safe
+    return clampTopOffset(offsetOfRow(firstRow, s.bytesPerRow), s);
+  };
+
+  // --- actions (thin, all funnel through clampTopOffset) ---------------------
+  const scrollByRows = (s, dRows) => {
+    const fr = rowOfOffset(s.topByteOffset, s.bytesPerRow) + dRows;
+    return { ...s, topByteOffset: clampTopOffset(offsetOfRow(fr, s.bytesPerRow), s) };
+  };
+  const gotoOffset = (s, offset) => ({ ...s, topByteOffset: clampTopOffset(offset, s) });
+  const dragThumbBy = (s, dPx) => {
+    const g = thumbGeometry(s);
+    return { ...s, topByteOffset: offsetFromThumbPixel(g.thumbY + dPx, s) };
+  };
+  const setThumbPixel = (s, yPx) => ({ ...s, topByteOffset: offsetFromThumbPixel(yPx, s) });
+  // bytesPerRow change: KEEP the byte offset (re-align down to the new row grid),
+  // do NOT preserve the row index. §3.
+  const changeBytesPerRow = (s, bpr) => {
+    const next = { ...s, bytesPerRow: bpr };
+    return { ...next, topByteOffset: clampTopOffset(s.topByteOffset, next) };
+  };
+
+  return {
+    rowOfOffset, offsetOfRow, rowCount, visibleRows, maxFirstRow,
+    clampTopOffset, thumbGeometry, offsetFromThumbPixel,
+    scrollByRows, gotoOffset, dragThumbBy, setThumbPixel, changeBytesPerRow,
+  };
+})();
+
+// ============================================================================
+// Everything below is throwaway page glue.
+// ============================================================================
+const SIZES = {
+  '700MB':  700 * 1024 * 1024,
+  '2GB':    2_000_000_000,
+  '8GB':    8_000_000_000,
+  'MAXSAFE': Number.MAX_SAFE_INTEGER,
+};
+const SIZE_LABEL = { '700MB':'700 MB', '2GB':'2 GB', '8GB':'8 GB', 'MAXSAFE':'MAX_SAFE_INTEGER' };
+
+let state = {
+  size: SIZES['2GB'],
+  bytesPerRow: 16,
+  topByteOffset: 0,
+  trackPx: 0,          // filled from DOM on layout
+  viewportPx: 0,       // filled from DOM on layout
+  rowPx: 16,
+  minThumbPx: 18,
+};
+let sizeKey = '2GB';
+let lastChange = '';
+let zoomOn = false;
+let zoomSpanRows = 0;     // how many rows the zoom band spans
+let zoomCentreRow = 0;    // row the zoom band is centred on
+
+const $ = (id) => document.getElementById(id);
+const rowsEl = $('rows'), sbOuter = $('sbOuter'), sbThumb = $('sbThumb');
+const zoomEl = $('zoom'), zbandEl = $('zband'), zthumbEl = $('zthumb');
+
+function measure() {
+  const r = sbOuter.getBoundingClientRect();
+  state.trackPx = Math.round(r.height);
+  state.viewportPx = Math.round(rowsEl.getBoundingClientRect().height) - 16; // padding
+}
+
+function fmtBig(n) {
+  if (n >= 1024*1024*1024) return (n/1024/1024/1024).toFixed(2) + ' GiB';
+  if (n >= 1024*1024) return (n/1024/1024).toFixed(1) + ' MiB';
+  return n.toLocaleString() + ' B';
+}
+function hex(n, width) {
+  // BigInt so we don't lose digits past 2^53 in the address gutter
+  let s = BigInt(Math.trunc(n)).toString(16).toUpperCase();
+  return s.padStart(width || 8, '0');
+}
+
+function renderViewer() {
+  measure();
+  const bpr = state.bytesPerRow;
+  const vr = Viewport.visibleRows(state);
+  const firstRow = Viewport.rowOfOffset(state.topByteOffset, bpr);
+  const rc = Viewport.rowCount(state);
+  const lastRow = Math.min(firstRow + vr, rc);
+  let html = '';
+  const addrW = state.size > 0x1_0000_0000 ? 10 : 8;
+  for (let r = firstRow; r < lastRow; r++) {
+    const off = r * bpr;
+    const isLastFile = r === rc - 1;
+    const n = isLastFile ? (state.size - off) : bpr;
+    let hcols = '', acols = '';
+    for (let i = 0; i < bpr; i++) {
+      if (i < n) {
+        const b = (Number((off + i) % 251)) & 0xff;       // synthetic, deterministic
+        hcols += b.toString(16).toUpperCase().padStart(2, '0') + ' ';
+        acols += (b >= 0x20 && b < 0x7f) ? String.fromCharCode(b) : '.';
+      } else { hcols += '   '; acols += ' '; }
+    }
+    html += `<div class="row ${r === firstRow ? 'first' : ''}">`
+         +  `<span class="addr">${hex(off, addrW)}</span>`
+         +  `<span class="hex">${hcols.trimEnd()}</span>`
+         +  `<span class="asc">${acols}</span></div>`;
+  }
+  rowsEl.innerHTML = html;
+}
+
+function renderThumb() {
+  const g = Viewport.thumbGeometry(state);
+  sbThumb.style.height = g.thumbH + 'px';
+  sbThumb.style.top = g.thumbY + 'px';
+}
+
+function renderZoom() {
+  zoomEl.classList.toggle('hidden', !zoomOn);
+  $('zoomToggle').classList.toggle('on', zoomOn);
+  $('zoomToggle').textContent = zoomOn ? 'Hide two-level zoom scrollbar' : 'Show two-level zoom scrollbar';
+  if (!zoomOn) return;
+  const vr = Viewport.visibleRows(state);
+  zoomSpanRows = Math.max(vr * 4, Math.round(Viewport.maxFirstRow(state) / 400)); // ~1/400 of the doc
+  $('zoomSpan').textContent = zoomSpanRows.toLocaleString();
+  const firstRow = Viewport.rowOfOffset(state.topByteOffset, state.bytesPerRow);
+  const lo = zoomCentreRow - zoomSpanRows / 2;
+  const w = zbandEl.getBoundingClientRect().width;
+  const tw = Math.max(14, w * (vr / zoomSpanRows));
+  const travel = w - tw;
+  const frac = zoomSpanRows <= 0 ? 0 : Math.min(1, Math.max(0, (firstRow - lo) / zoomSpanRows));
+  zthumbEl.style.width = tw + 'px';
+  zthumbEl.style.left = (travel * frac) + 'px';
+}
+
+function renderState(changedKey) {
+  const bpr = state.bytesPerRow;
+  const g = Viewport.thumbGeometry(state);
+  const mfr = Viewport.maxFirstRow(state);
+  const rc = Viewport.rowCount(state);
+  const fr = Viewport.rowOfOffset(state.topByteOffset, bpr);
+  const rowsPerPx = g.travel > 0 ? mfr / g.travel : 0;
+  const overflowRisk = (g.travel * mfr) > Number.MAX_SAFE_INTEGER;
+
+  const rows = [
+    ['file size', `${SIZE_LABEL[sizeKey]}  (${fmtBig(state.size)})`],
+    ['bytesPerRow', bpr],
+    ['topByteOffset', `0x${hex(state.topByteOffset)}  ·  ${state.topByteOffset.toLocaleString()}`, true],
+    ['firstRow', fr.toLocaleString()],
+    ['rowCount', rc.toLocaleString()],
+    ['visibleRows', Viewport.visibleRows(state)],
+    ['maxFirstRow', mfr.toLocaleString()],
+    ['— thumb —', ''],
+    ['trackPx', g.trackPx],
+    ['thumbH (px)', `${g.thumbH}  ${g.thumbH === state.minThumbPx ? '(min — clamped)' : ''}`],
+    ['thumbY (px)', g.thumbY],
+    ['travel (px)', g.travel],
+    ['rows / thumb-pixel', Math.round(rowsPerPx).toLocaleString()],
+    ['bytes / thumb-pixel', fmtBig(Math.round(rowsPerPx) * bpr)],
+    ['(travel×maxFirstRow) &gt; 2^53?', overflowRisk ? 'yes — divide-first path in use' : 'no'],
+  ];
+  $('kv').innerHTML = rows.map(([k, v, em]) =>
+    `<dt>${k}</dt><dd class="${em ? 'em' : ''}">${v}</dd>`).join('');
+
+  const ch = $('changed');
+  if (changedKey === 'probe') {
+    const finite = Number.isFinite(g.thumbY) && Number.isFinite(fr) && !Number.isNaN(g.thumbY);
+    const inRange = g.thumbY >= 0 && g.thumbY <= g.travel;
+    ch.className = 'changed' + (finite && inRange ? '' : ' warnrow');
+    ch.innerHTML = `<b>Overflow probe:</b> thumbY finite &amp; not NaN: <b>${finite}</b>; `
+      + `0 ≤ thumbY ≤ travel: <b>${inRange}</b>; firstRow = ${fr.toLocaleString()}.`;
+  } else if (lastChange) {
+    ch.className = 'changed';
+    ch.innerHTML = lastChange;
+  }
+}
+
+function render(changedKey) {
+  renderViewer();
+  renderThumb();
+  renderZoom();
+  renderState(changedKey);
+}
+
+// ---- action dispatch --------------------------------------------------------
+function apply(act) {
+  const [name, arg] = act.split(':');
+  const before = state.topByteOffset;
+  switch (name) {
+    case 'rows':  state = Viewport.scrollByRows(state, +arg); break;
+    case 'wheel': state = Viewport.scrollByRows(state, +arg); break;
+    case 'page':  state = Viewport.scrollByRows(state, (+arg) * (Viewport.visibleRows(state) - 1)); break;
+    case 'home':  state = Viewport.gotoOffset(state, 0); break;
+    case 'end':   state = Viewport.gotoOffset(state, state.size); break;
+    case 'drag':  state = Viewport.dragThumbBy(state, +arg); break;
+    case 'goto': {
+      const raw = $('gotoInput').value.trim();
+      if (!raw) return;
+      const v = raw.toLowerCase().startsWith('0x') ? parseInt(raw, 16) : Number(raw);
+      if (!Number.isFinite(v)) { flash(`Goto: “${raw}” is not a number`); return; }
+      state = Viewport.gotoOffset(state, v);
+      break;
+    }
+    case 'bpr':   state = Viewport.changeBytesPerRow(state, +arg); break;
+    case 'size': {
+      sizeKey = arg;
+      const next = { ...state, size: SIZES[arg] };
+      state = { ...next, topByteOffset: Viewport.clampTopOffset(state.topByteOffset, next) };
+      break;
+    }
+    case 'toggleZoom': zoomOn = !zoomOn; zoomCentreRow = Viewport.rowOfOffset(state.topByteOffset, state.bytesPerRow); break;
+    case 'zoomRecentre': zoomCentreRow = Viewport.rowOfOffset(state.topByteOffset, state.bytesPerRow); flash('Zoom band re-centred on current position'); render(); return;
+    case 'zoomDrag': {
+      const w = zbandEl.getBoundingClientRect().width;
+      const vr = Viewport.visibleRows(state);
+      const tw = Math.max(14, w * (vr / zoomSpanRows));
+      const travel = w - tw;
+      const rowsPerZoomPx = travel > 0 ? zoomSpanRows / travel : 0;
+      state = Viewport.scrollByRows(state, Math.round((+arg) * rowsPerZoomPx));
+      break;
+    }
+  }
+  const moved = state.topByteOffset - before;
+  if (name !== 'toggleZoom' && name !== 'zoomDrag') {
+    flash(`<b>${labelFor(act)}</b> — topByteOffset ${moved >= 0 ? '+' : ''}${moved.toLocaleString()} `
+      + `→ 0x${hex(state.topByteOffset)} (row ${Viewport.rowOfOffset(state.topByteOffset, state.bytesPerRow).toLocaleString()})`);
+  } else if (name === 'zoomDrag') {
+    flash(`<b>zoom drag ${arg}px</b> — topByteOffset ${moved >= 0 ? '+' : ''}${moved.toLocaleString()} → 0x${hex(state.topByteOffset)}`);
+  }
+  render();
+}
+function labelFor(act) {
+  const map = { 'home':'Ctrl+Home', 'end':'Ctrl+End', 'goto':'Goto' };
+  if (map[act]) return map[act];
+  const [n, a] = act.split(':');
+  if (n === 'rows') return `arrow ${a > 0 ? '+' : ''}${a} row`;
+  if (n === 'wheel') return `wheel ${a > 0 ? '+' : ''}${a}`;
+  if (n === 'page') return a > 0 ? 'PageDn' : 'PageUp';
+  if (n === 'drag') return `drag thumb ${a > 0 ? '+' : ''}${a}px`;
+  if (n === 'bpr') return `bytesPerRow → ${a}`;
+  if (n === 'size') return `size → ${SIZE_LABEL[a]}`;
+  return act;
+}
+function flash(html) { lastChange = html; }
+
+document.body.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  apply(b.dataset.act);
+  advanceIfStep(b);
+});
+$('gotoInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') apply('goto'); });
+
+// ---- real thumb drag ------------------------------------------------------
+let dragging = null;
+sbThumb.addEventListener('pointerdown', (e) => {
+  const g = Viewport.thumbGeometry(state);
+  dragging = { startY: e.clientY, startTop: g.thumbY };
+  sbThumb.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+sbThumb.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const y = dragging.startTop + (e.clientY - dragging.startY);
+  state = Viewport.setThumbPixel(state, y);
+  flash(`<b>thumb drag</b> → 0x${hex(state.topByteOffset)} (row ${Viewport.rowOfOffset(state.topByteOffset, state.bytesPerRow).toLocaleString()})`);
+  render();
+});
+sbThumb.addEventListener('pointerup', () => { dragging = null; });
+sbOuter.addEventListener('pointerdown', (e) => {
+  if (e.target === sbThumb) return;
+  const rect = sbOuter.getBoundingClientRect();
+  state = Viewport.setThumbPixel(state, e.clientY - rect.top);
+  flash(`<b>track click</b> → 0x${hex(state.topByteOffset)}`);
+  render();
+});
+
+// ============================================================================
+// Walkthroughs
+// ============================================================================
+const WALKS = [
+  {
+    name: 'A · One pixel = how much?',
+    body: `Set the stage to <b>2 GB / 16 bytes-per-row</b>, then nudge the thumb one pixel at a time. Watch
+      <code>rows / thumb-pixel</code> and how far <code>topByteOffset</code> jumps per press. This is the raw
+      fact the ticket turns on: the thumb is a coarse instrument by physics, not by sloppiness.`,
+    steps: [['size:2GB','2 GB'],['bpr:16','16 bpr'],['home','Ctrl+Home'],['drag:1','drag +1px'],['drag:1','drag +1px'],['drag:1','drag +1px']],
+    verdict: `Expect ~200 k rows (~3 MB) per pixel. No amount of care makes the thumb land on a chosen offset —
+      so the thumb’s only job is <i>gross</i> positioning.`,
+  },
+  {
+    name: 'B · Hit 0x2A000000 with the thumb alone',
+    body: `Target offset <code>0x2A000000</code> (704,643,072). Try to get there with drag only. Nudge, overshoot,
+      nudge back. Read <code>topByteOffset</code> after each step — see how close you can realistically get.`,
+    steps: [['size:2GB','2 GB'],['home','Ctrl+Home'],['drag:10','drag +10px'],['drag:10','drag +10px'],['drag:-1','drag −1px'],['drag:1','drag +1px']],
+    verdict: `You’ll land within a few MB and no closer. If the viewer had no other fine control, “go to a known
+      offset” would be impossible — which is why the next two scenarios matter.`,
+  },
+  {
+    name: 'C · Same target, one Goto',
+    body: `Now reset and type the offset into Goto. One action, exact landing, works identically at any file size.`,
+    steps: [['size:2GB','2 GB'],['home','Ctrl+Home'],['goto','Goto 0x2A000000  ⟵ set the input first']],
+    verdict: `Goto is the precise absolute-positioning path. The open question: is Goto <b>enough</b> on its own,
+      or is it too heavyweight for “move a bit from here”? Scenario D tests the in-between.`,
+    presetGoto: '0x2A000000',
+  },
+  {
+    name: 'D · Drag near, then wheel/keys to exact',
+    body: `The realistic workflow: drag the thumb to get in the neighbourhood, then wheel and arrow to the exact
+      row. Do that here — drag once, then wheel and arrow. Feel whether “thumb for gross + wheel/keys for fine”
+      is a comfortable pair without any zoom scrollbar.`,
+    steps: [['size:2GB','2 GB'],['home','Ctrl+Home'],['drag:10','drag +10px'],['wheel:3','wheel +3'],['wheel:3','wheel +3'],['rows:1','arrow +1'],['rows:-1','arrow −1']],
+    verdict: `If this feels fine, §11 stands as written: <b>wheel + keyboard + Goto</b> are the fine path and the
+      two-level zoom scrollbar is not needed for Phase 1.`,
+  },
+  {
+    name: 'E · bytesPerRow keeps your byte, not your row',
+    body: `Goto <code>0x1001</code> (4097 → aligns to 4096 at 16 bpr). Then walk bytes-per-row 16 → 24 → 32 → 8 → 16
+      and watch <code>topByteOffset</code>. It stays near 4096 and never keeps row index 256 — good. But notice
+      it <b>ratchets down every step</b>: 4096 → 4080 → 4064 → 4064 → 4064. Each change aligns down from the
+      <i>previous aligned value</i>, not from a remembered anchor, so 16 → 24 → 16 does <b>not</b> bring you
+      back to 4096.`,
+    steps: [['size:2GB','2 GB'],['goto','Goto 0x1001  ⟵ set input first'],['bpr:24','→ 24'],['bpr:32','→ 32'],['bpr:8','→ 8'],['bpr:16','→ 16']],
+    verdict: `Open sub-question for part (c): is the ratchet acceptable (loses ≤ newBpr−1 bytes per switch, and
+      bpr is rarely toggled), or should <code>changeBytesPerRow</code> re-align from a preserved anchor offset
+      so round-trips are lossless? The row-index-vs-byte-offset rule itself is confirmed; only the anchor
+      question is open before this clause freezes.`,
+    presetGoto: '0x1001',
+  },
+  {
+    name: 'F · Min-thumb regime + round-trip',
+    body: `Go to <b>8 GB</b>. The exact-fraction thumb height is far below one pixel, so <code>thumbH</code> is
+      clamped to <code>minThumbPx</code> and <code>travel = trackPx − minThumbPx</code>. Drag around and confirm
+      the thumb still covers the whole track and still reaches row 0 and the last row — i.e.
+      <code>offsetFromThumbPixel</code> and <code>thumbGeometry</code> are still inverses under clamping.`,
+    steps: [['size:8GB','8 GB'],['home','Ctrl+Home'],['drag:10','drag +10px'],['end','Ctrl+End'],['home','Ctrl+Home']],
+    verdict: `thumbH shows “(min — clamped)”, Ctrl+End puts thumbY at travel, Ctrl+Home puts it at 0. Min-thumb
+      handling in <code>thumbGeometry</code> holds — freeze it.`,
+  },
+  {
+    name: 'G · MAX_SAFE_INTEGER overflow probe',
+    body: `Set size to <b>MAX_SAFE_INTEGER</b> bytes (~9.0 × 10¹⁵). This is the §9 overflow probe. Press the probe
+      check, then Ctrl+End, then drag. The panel asserts <code>thumbY</code> is finite, not NaN, and inside
+      <code>[0, travel]</code>, and that <code>firstRow</code> is exact. The divide-before-multiply form in
+      <code>thumbGeometry</code> is what keeps <code>travel × firstRow</code> from exceeding 2^53.`,
+    steps: [['size:MAXSAFE','MAX_SAFE'],['probe','▶ run probe check'],['end','Ctrl+End'],['probe','▶ run probe check'],['drag:-10','drag −10px'],['probe','▶ run probe check']],
+    verdict: `All three checks stay <b>true</b> and the address gutter (BigInt) shows full-width offsets with no
+      rounding. Coordinate math is safe past 2^32 and up to 2^53 — freeze the surface.`,
+  },
+  {
+    name: 'H · Two-level zoom vs Goto (the part-b call)',
+    body: `Turn on the two-level zoom scrollbar. Try to reach <code>0x2A000000</code> using only the zoom band:
+      drag it, “Re-centre zoom”, drag again, repeat. Count the cycles. Then do it once with Goto. The zoom band
+      is a real mechanism with real cost — a second draggable, a span/centre model, re-centre affordance, and it
+      still can’t land exactly without wheel/keys at the end.`,
+    steps: [['size:2GB','2 GB'],['home','Ctrl+Home'],['toggleZoom','show zoom band'],['zoomDrag:8','zoom +8px'],['zoomRecentre','re-centre'],['zoomDrag:8','zoom +8px'],['zoomRecentre','re-centre'],['zoomDrag:1','zoom +1px']],
+    verdict: `If zoom takes several drag/recentre cycles to match one Goto and still needs wheel/keys for the last
+      rows, it doesn’t earn its complexity in Phase 1. Recommended answer to (b): <b>no zoom scrollbar in
+      Phase 1</b>; revisit only if real use shows Goto + wheel + keys insufficient.`,
+  },
+];
+
+let activeWalk = 0;
+let stepIdx = 0;
+
+function renderTabs() {
+  $('tabs').innerHTML = WALKS.map((w, i) =>
+    `<div class="tab ${i === activeWalk ? 'active' : ''}" data-walk="${i}">${w.name}</div>`).join('');
+}
+function renderScenario() {
+  const w = WALKS[activeWalk];
+  $('scenario').innerHTML =
+    `<p>${w.body}</p>`
+    + `<div class="steps">` + w.steps.map(([act, label], i) =>
+        `<button data-step="${i}" data-act="${act}" class="${i < stepIdx ? 'done' : ''} ${i === stepIdx ? 'next' : ''}">${i + 1}. ${label}</button>`).join('') + `</div>`
+    + `<div class="verdict"><b>What to watch:</b> ${w.verdict}</div>`;
+}
+function startWalk(i) {
+  activeWalk = i; stepIdx = 0;
+  const w = WALKS[i];
+  // reset to a known state so scenarios are reproducible
+  sizeKey = '2GB';
+  state = { ...state, size: SIZES['2GB'], bytesPerRow: 16, topByteOffset: 0 };
+  zoomOn = false;
+  if (w.presetGoto) $('gotoInput').value = w.presetGoto;
+  lastChange = `Walkthrough <b>${w.name}</b> started — state reset.`;
+  renderTabs(); renderScenario(); render();
+}
+function advanceIfStep(btn) {
+  if (!btn.hasAttribute('data-step')) return;
+  const i = +btn.dataset.step;
+  if (i === stepIdx) stepIdx++;
+  renderScenario();
+}
+$('tabs').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-walk]');
+  if (t) startWalk(+t.dataset.walk);
+});
+
+// ---- boot -----------------------------------------------------------------
+window.addEventListener('resize', () => render());
+renderTabs();
+renderScenario();
+render();
+</script>
+</body>
+</html>
