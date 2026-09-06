@@ -48,6 +48,7 @@
     background: #fff;
     overflow: hidden;
     display: flex;
+    height: 460px;
   }
   .rows {
     flex: 1;
@@ -55,8 +56,9 @@
     font-size: 12.5px;
     padding: 8px 0;
     user-select: none;
+    overflow: hidden;
   }
-  .row { display: flex; gap: 18px; padding: 1px 14px; white-space: pre; }
+  .row { display: flex; gap: 18px; padding: 0 14px; white-space: pre; line-height: 16px; height: 16px; }
   .row .addr { color: var(--accent); }
   .row .hex { color: var(--ink); }
   .row .asc { color: var(--ink-soft); }
@@ -340,9 +342,10 @@ const rowsEl = $('rows'), sbOuter = $('sbOuter'), sbThumb = $('sbThumb');
 const zoomEl = $('zoom'), zbandEl = $('zband'), zthumbEl = $('zthumb');
 
 function measure() {
-  const r = sbOuter.getBoundingClientRect();
-  state.trackPx = Math.round(r.height);
-  state.viewportPx = Math.round(rowsEl.getBoundingClientRect().height) - 16; // padding
+  const track = Math.round(sbOuter.getBoundingClientRect().height);
+  const vp = Math.round(rowsEl.getBoundingClientRect().height) - 16; // 8px top+bottom padding
+  state.trackPx = track > 20 ? track : 460;         // fallback if called pre-layout
+  state.viewportPx = vp > 48 ? vp : 444;
 }
 
 function fmtBig(n) {
