@@ -60,3 +60,17 @@ A range of bytes that carries meaning of its own — a highlight, a comment — 
 stays put while the reader goes on selecting elsewhere. Many can exist at once.
 Out of scope for phase 1, named here so that it never gets called a selection.
 _Avoid_: selected range, highlight, marker, tag
+
+**Element**:
+A fixed-width multi-byte value decoded from the document's bytes — a u16, an
+i32, an f64 — as opposed to the bytes themselves. Reading one requires knowing a
+width and a byte order; a byte requires neither. Out of scope for phase 1, named
+here so that it never gets called a byte.
+_Avoid_: field, word, value, datum
+
+**Inspector**:
+The surface that decodes the bytes at the cursor into every element type at
+once. Distinct from an element grid, which would render the document itself as
+elements rather than bytes; the inspector leaves the document's rendering
+byte-oriented. Out of scope for phase 1.
+_Avoid_: data panel, decoder, preview

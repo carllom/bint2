@@ -108,3 +108,59 @@ coalescing and large-read policies around the viewport measurement above.
 - **Gap-bridging coalescing** — rejected, see above.
 - **Whole-span reads from the render path** — rejected: same total work, strictly
   worse degradation at page boundaries.
+
+## Amendment — the element-view consequence, resolved ([#13](https://github.com/carllom/bint2/issues/13))
+
+The Consequences section above left one thing open: per-row reads appear to
+constrain the phase-1.5 element view, because a `u32` at a row or page boundary
+needs bytes the row's own read does not contain. Resolved: **it does not, and
+`PageCache` stays element-unaware.**
+
+Three facts collapse the problem.
+
+- **64 KiB divides every element width ≤ 8** (`65536 % 8 == 0`), and `read` /
+  `readSync` are offset+length and already assemble across pages. There is no
+  alignment concept in the cache to add. The only page-boundary effect on an
+  element grid is the one already weighed and accepted here: a `readSync` that
+  is not fully resident returns `null` and the row paints `··`.
+- **Every `bytesPerRow` preset (8 / 16 / 24 / 32) is a multiple of 8.** With
+  elements anchored at file offset 0, a grid element therefore never straddles a
+  row boundary — the boundary problem is a property of an *unaligned* element
+  grid, not of per-row reads.
+- **The cursor inspector never uses the row path.** It is a direct point read of
+  ≤ 8 bytes at an arbitrary offset, which ADR-0001's frozen `ByteSource` already
+  serves — including its short-read-at-EOF behaviour, which is what makes a
+  cursor at `size - 2` render a blank `u32` rather than throwing.
+
+**Constraint recorded for phase 1.5** (phase 1 assumes it; 1.5 either honours it
+or pays to break it): *elements are anchored at file offset 0, and every
+`bytesPerRow` preset is a multiple of 8.* The case that breaks it is an
+anchor offset — a 3-byte header putting `u32`s at 3, 7, 11 — which would need the
+row read to over-read by `maxElementWidth - 1`. That retrofit is deliberately
+local: `read(docRow)` is one closure in `HexViewer` over `readSync` / `read`.
+
+**No over-read in phase 1.** Beyond being dead weight under the constraint, it is
+not free: a `bytesPerRow + 7` span straddles a 64 KiB page more often than a
+`bytesPerRow` span, so `readSync` misses more often and paints more placeholder
+rows — degrading the M5 path to serve a feature that by construction does not
+need it.
+
+**Two zero-cost rules phase 1 adopts instead**, both pinned by §9 tests because
+neither has any observable effect in phase 1:
+
+1. The renderer **iterates `bytes`** and never assumes
+   `bytes.length === view.bytesPerRow`. `render(view)`'s per-row `read` already
+   carries `offset`, so a 1.5 renderer handed a longer array needs no new field.
+   Pinned by a `HexViewer` component test that hands the renderer a row array
+   longer than `bytesPerRow` and asserts it paints `bytes.length` columns.
+2. **`toHex(value, width)` does not mask to a byte** — it pads to `width`, so it
+   serves a `u32` unchanged and `format.ts` needs no phase-1 change at all.
+   Pinned by a `format.ts` table row: `toHex(0xDEADBEEF, 8) === 'DEADBEEF'`.
+
+`render(view)` is **not** widened — no `element` descriptor field now — and the
+element-grid rewrite of the renderer is **sanctioned in advance**, as
+[#11](https://github.com/carllom/bint2/issues/11) did for annotations. Plan §11's
+claim that seams are owed in `viewport.ts` is **wrong and deleted at M0**: an
+element grid changes only how a row's bytes are painted, `bytesPerRow` stays a
+byte count, and the viewport surface is frozen by
+[#8](https://github.com/carllom/bint2/issues/8) regardless.
