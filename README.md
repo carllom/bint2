@@ -8,7 +8,6 @@ A reusable starting point for browser apps built with Vue 3 + TypeScript. Click 
 - **Framework**: Vue 3 + TypeScript (`vue-tsc` for type-checking)
 - **Routing**: Vue Router
 - **State**: Pinia (installed and wired; no persistence plugin by default — see below)
-- **Icons**: [@lucide/vue](https://lucide.dev/)
 - **Unit tests**: Vitest + `@vue/test-utils` + `happy-dom`
 - **E2E tests**: Playwright (config + one example spec)
 - **Linting/formatting**: ESLint (flat config, Vue + TypeScript rules) + Prettier

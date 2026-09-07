@@ -7,6 +7,8 @@
 <template>
   <div class="app-shell">
     <header class="app-shell__toolbar" data-region="toolbar"></header>
+    <!-- Populated only when the open document becomes a dead source (ADR-0004);
+         zero-height otherwise, so it is not persistent chrome. -->
     <div class="app-shell__banner" data-region="banner"></div>
     <main class="app-shell__viewport" data-region="viewport"></main>
     <footer class="app-shell__status-bar" data-region="status-bar"></footer>
@@ -37,10 +39,6 @@
 
 .app-shell__banner {
   flex: none;
-}
-
-.app-shell__banner:empty {
-  display: none;
 }
 
 .app-shell__viewport {

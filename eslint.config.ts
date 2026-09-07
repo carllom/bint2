@@ -33,7 +33,8 @@ export default defineConfigWithVueTs(
 
   {
     // src/core is the framework-free core (see src/core/index.ts). Enforced here
-    // as well as by src/core/__tests__/framework-free.spec.ts.
+    // as well as by src/core/__tests__/framework-free.spec.ts — keep the two
+    // forbidden lists in step.
     name: 'app/core-is-framework-free',
     files: ['src/core/**/*.{ts,mts}'],
     ignores: ['src/core/**/__tests__/**'],

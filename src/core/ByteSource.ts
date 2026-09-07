@@ -3,26 +3,19 @@
  * It answers for any byte range on demand and never holds the whole document.
  *
  * Frozen by ADR-0001. The interface is specified worker-compatible, but no
- * Web Worker is built in phase 1. Implementations (FileByteSource, the test
- * doubles) land at M2 — this module is the type surface only.
+ * Web Worker is built in phase 1. This module is the M0 skeleton: the frozen
+ * type surface only. Implementations (FileByteSource, the test doubles) and the
+ * ByteSourceError value class land at M2, with the tests for close/latch
+ * semantics that runtime code needs.
  */
-
-export type ByteSourceErrorCode = 'read-failed' | 'source-closed' | 'source-gone'
 
 /**
- * Failures reject with one of these. Across a worker boundary it would be
- * posted as a plain payload and reconstructed on the main thread, because
- * structured clone drops `Error` subclass identity.
+ * The `code` a ByteSourceError carries. Across a worker boundary the failure
+ * would be posted as a plain payload and reconstructed on the main thread,
+ * because structured clone drops Error subclass identity — hence a plain union
+ * rather than a class hierarchy.
  */
-export class ByteSourceError extends Error {
-  readonly code: ByteSourceErrorCode
-
-  constructor(code: ByteSourceErrorCode, message?: string) {
-    super(message ?? code)
-    this.name = 'ByteSourceError'
-    this.code = code
-  }
-}
+export type ByteSourceErrorCode = 'read-failed' | 'source-closed' | 'source-gone'
 
 export interface ByteSource {
   /** Document size in bytes. May exceed 2^32. */

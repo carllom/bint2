@@ -440,8 +440,6 @@ The earlier draft's §12 risk list is resolved:
 - **Min thumb size vs. exact fraction** — handled in `thumbGeometry` (clamp to
   `[minThumbPx, trackPx]`) and pinned by a test
   ([#8](https://github.com/carllom/bint2/issues/8)).
-- **Browsers without `showOpenFilePicker`** — moot; the picker is dropped, and
-  the single `<input>` + drag path works everywhere.
 - **Copying a huge selection** — refuse past 8 MiB of source bytes with a message
   naming the cap and the size; never truncate
   ([ADR-0003](adr/0003-selection-is-one-range-cursor-is-its-collapsed-form.md)).

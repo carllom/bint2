@@ -10,4 +10,3 @@
 // Phase 1 builds no Web Worker (ADR-0001) — no stub worker module lives here.
 
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
-export { ByteSourceError } from './ByteSource'

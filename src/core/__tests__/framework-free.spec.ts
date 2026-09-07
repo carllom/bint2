@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest'
 
 // Mechanical enforcement of the design rule in src/core/index.ts: nothing under
 // src/core may import a framework module. A convention that is only in a comment
-// is not a rule. Paired with the eslint override for `src/core/**`.
+// is not a rule. Paired with the `app/core-is-framework-free` override in
+// eslint.config.ts — keep the forbidden list here in step with that one.
 
 const coreDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -17,11 +18,11 @@ function sourceFiles(dir: string): string[] {
     if (entry.isDirectory()) {
       return entry.name === '__tests__' ? [] : sourceFiles(path)
     }
-    return /\.(ts|mts|vue)$/.test(entry.name) ? [path] : []
+    return /\.(ts|mts)$/.test(entry.name) ? [path] : []
   })
 }
 
-/** Specifiers of every static/dynamic import and `require` in the source. */
+/** Specifiers of every static import, dynamic `import()`, and `require` in the source. */
 function importedSpecifiers(source: string): string[] {
   const specifiers: string[] = []
   const patterns = [
