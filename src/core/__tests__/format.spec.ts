@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addressWidthFor,
+  parseOffset,
   toAddress,
   toAsciiChar,
   toBinary,
@@ -103,6 +104,44 @@ describe('toByteSize', () => {
     [2_000_000_000, '1.9 GiB'],
   ])('toByteSize(%i) === %s', (bytes, expected) => {
     expect(toByteSize(bytes)).toBe(expected)
+  })
+})
+
+describe('parseOffset', () => {
+  it.each([
+    // Plain decimal.
+    ['0', 0],
+    ['8000', 8000],
+    ['  16  ', 16], // surrounding whitespace is trimmed
+    ['1999999360', 1999999360],
+    // 0x-prefixed hex, either case of the prefix and the digits.
+    ['0x0', 0],
+    ['0x1F40', 8000],
+    ['0X1f40', 8000],
+    ['0xDEADBEEF', 0xdeadbeef],
+    // `_` and `,` are digit separators — the status bar prints the decimal
+    // offset with commas, so a paste of it round-trips.
+    ['1,999,999,360', 1999999360],
+    ['0x1_F40', 8000],
+    // Absurdly large is still a number — the caller clamps it to the file.
+    ['0xFFFFFFFFFFFFFFFF', 0xffffffffffffffff],
+  ])('parseOffset(%j) === %i', (text, expected) => {
+    expect(parseOffset(text)).toBe(expected)
+  })
+
+  it.each([
+    [''],
+    ['   '],
+    ['1F40'], // bare hex without the 0x prefix is ambiguous, so rejected
+    ['0x'], // prefix with no digits
+    ['0xGG'],
+    ['12abc'],
+    ['-5'], // an offset is never signed
+    ['3.5'],
+    ['0x1.8'],
+    ['nonsense'],
+  ])('parseOffset(%j) === null', (text) => {
+    expect(parseOffset(text)).toBeNull()
   })
 })
 

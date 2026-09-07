@@ -13,6 +13,7 @@ import {
 import type { ViewportMetrics } from '@/core'
 import { DomHexRenderer } from '@/rendering'
 import type { HexRowView, SelectionView } from '@/rendering'
+import GotoBox from '@/components/GotoBox.vue'
 import VirtualScrollbar from '@/components/VirtualScrollbar.vue'
 import { useDocumentStore } from '@/stores/document'
 
@@ -398,6 +399,15 @@ function onKeyDown(event: KeyboardEvent): void {
   revealOffset(documentStore.selection.focus)
 }
 
+/**
+ * Goto closed (confirm or `Esc`): focus returns to the Viewport so keyboard
+ * navigation carries straight on (#24, ADR-0005). The jump itself, when there
+ * was one, already went through the store.
+ */
+function onGotoClose(): void {
+  rowAreaEl.value?.focus()
+}
+
 /** Scroll the least amount that brings `offset`'s row fully into view (ADR-0003). */
 function revealOffset(offset: number): void {
   const m = metrics.value
@@ -476,11 +486,13 @@ onBeforeUnmount(() => {
       :top-byte-offset="documentStore.topByteOffset"
       @scroll-to-pixel="onScrollToPixel"
     />
+    <GotoBox v-if="hasSource" :metrics="metrics" @close="onGotoClose" />
   </div>
 </template>
 
 <style scoped>
 .hex-viewer {
+  position: relative; /* the Goto box positions against this */
   display: flex;
   height: 100%;
   /* No native scrollbar anywhere — the custom row-space bar is the only one. */

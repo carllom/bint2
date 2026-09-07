@@ -55,6 +55,26 @@ export function toSignedByte(byte: number): number {
 }
 
 /**
+ * Parse a reader-typed Goto offset (#24): a `0x`-prefixed hex value **or** a
+ * plain decimal one, with `_` and `,` tolerated as digit separators (the status
+ * bar prints the decimal offset with commas, so a paste of it round-trips).
+ * Bare hex without the `0x` prefix is ambiguous and rejected; so is anything
+ * signed or fractional. Returns a non-negative number, or `null` when the text
+ * is neither form. Clamping an out-of-range result to the open document needs
+ * the file size and is the caller's job, not this one's.
+ */
+export function parseOffset(text: string): number | null {
+  const cleaned = text.trim().replace(/[_,]/g, '')
+  let value = NaN
+  if (/^0[xX][0-9a-fA-F]+$/.test(cleaned)) {
+    value = parseInt(cleaned.slice(2), 16)
+  } else if (/^[0-9]+$/.test(cleaned)) {
+    value = parseInt(cleaned, 10)
+  }
+  return Number.isFinite(value) ? value : null
+}
+
+/**
  * A human-readable size for the status bar's document identity — binary units
  * (KiB/MiB/GiB…), since this is a byte-exact tool. Under 1 KiB stays an exact
  * byte count; at or above it, one decimal place. The precise byte count is shown

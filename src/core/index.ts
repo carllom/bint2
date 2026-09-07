@@ -15,6 +15,7 @@ export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export {
   addressWidthFor,
+  parseOffset,
   toAddress,
   toAsciiChar,
   toBinary,
