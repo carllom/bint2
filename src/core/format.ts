@@ -35,3 +35,41 @@ export function addressWidthFor(size: number): number {
 export function toAsciiChar(byte: number): string {
   return byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : '.'
 }
+
+/**
+ * Binary digits, left-padded with `0` to at least `width` characters. Mirrors
+ * {@link toHex}: `width` is a minimum and never a mask, so `toBinary(0x100)`
+ * keeps its ninth digit. The status bar's `bin` field for the byte under the
+ * Cursor.
+ */
+export function toBinary(value: number, width = 8): string {
+  return value.toString(2).padStart(width, '0')
+}
+
+/**
+ * A byte read as a signed 8-bit two's-complement integer: `0x80`–`0xFF` map to
+ * `-128`–`-1`, everything below is itself. The status bar's `i8` field.
+ */
+export function toSignedByte(byte: number): number {
+  return byte >= 0x80 ? byte - 0x100 : byte
+}
+
+/**
+ * A human-readable size for the status bar's document identity — binary units
+ * (KiB/MiB/GiB…), since this is a byte-exact tool. Under 1 KiB stays an exact
+ * byte count; at or above it, one decimal place. The precise byte count is shown
+ * alongside this, not replaced by it.
+ */
+export function toByteSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(1)} ${units[unit]}`
+}

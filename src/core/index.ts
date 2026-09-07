@@ -13,7 +13,15 @@ export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
 export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
-export { addressWidthFor, toAddress, toAsciiChar, toHex } from './format'
+export {
+  addressWidthFor,
+  toAddress,
+  toAsciiChar,
+  toBinary,
+  toByteSize,
+  toHex,
+  toSignedByte,
+} from './format'
 export type { Selection, SelectionRange } from './selection'
 export { cursorAt, extendTo, isCollapsed, rangeOf } from './selection'
 export type { ThumbGeometry, ViewportMetrics } from './viewport'
