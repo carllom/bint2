@@ -12,3 +12,14 @@
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
 export { addressWidthFor, toAddress, toAsciiChar, toHex } from './format'
+export type { ThumbGeometry, ViewportMetrics } from './viewport'
+export {
+  clampTopOffset,
+  maxFirstRow,
+  offsetFromThumbPixel,
+  offsetOfRow,
+  rowCount,
+  rowOfOffset,
+  thumbGeometry,
+  visibleRows,
+} from './viewport'

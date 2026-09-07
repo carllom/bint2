@@ -5,12 +5,53 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { byteSourceFactoryKey } from '@/byteSourceFactory'
 import type { ByteSource } from '@/core'
-import { FileByteSource } from '@/core'
+import { FileByteSource, toAddress } from '@/core'
 import { useDocumentStore } from '@/stores/document'
 import HomeView from '@/views/HomeView.vue'
 
 function fileOf(bytes: number[] | Uint8Array, name = 'test.bin'): File {
   return new File([Uint8Array.from(bytes)], name)
+}
+
+/**
+ * A source that reports a 2 GB size and generates bytes on demand — byte `i`
+ * holds `i & 0xff`. It never allocates anything near the whole document, and it
+ * records every read so a test can prove no code path asks for more than a
+ * screenful (plan §11 "synthetic" substitution).
+ */
+class SyntheticByteSource implements ByteSource {
+  readonly size: number
+  readonly reads: { offset: number; length: number }[] = []
+
+  constructor(size = 2e9) {
+    this.size = size
+  }
+
+  read(offset: number, length: number): Promise<Uint8Array> {
+    const count = Math.max(0, Math.min(length, this.size - offset))
+    this.reads.push({ offset, length: count })
+    const bytes = new Uint8Array(count)
+    for (let i = 0; i < count; i++) {
+      bytes[i] = (offset + i) & 0xff
+    }
+    return Promise.resolve(bytes)
+  }
+
+  readSync(): Uint8Array | null {
+    return null
+  }
+
+  prefetch(): void {}
+
+  close(): void {}
+
+  get maxReadLength(): number {
+    return this.reads.reduce((max, r) => Math.max(max, r.length), 0)
+  }
+
+  get bytesRead(): number {
+    return this.reads.reduce((sum, r) => sum + r.length, 0)
+  }
 }
 
 /** A source whose reads stay pending until {@link resolveAll}. */
@@ -219,5 +260,153 @@ describe('the app shell, mounted whole', () => {
     const app = mountApp()
     expect(app.find('.hex-viewer__empty').exists()).toBe(true)
     expect(app.findAll('.hex-row')).toHaveLength(0)
+  })
+})
+
+// In happy-dom nothing has layout, so the probe measures 0 and the Viewport
+// keeps its pre-measurement fallbacks: rowPx 18, viewportPx 720 -> 40 whole rows
+// visible, 41 rendered. rowCount for 2 GB / 16 bpr is 125_000_000, so
+// maxFirstRow is 125_000_000 - 40 = 124_999_960.
+const ROWS_RENDERED = 41
+const MAX_FIRST_ROW = 125_000_000 - 40
+const LAST_TOP_OFFSET = MAX_FIRST_ROW * 16 // 1_999_999_360
+
+async function openSynthetic(app: VueWrapper, source: SyntheticByteSource): Promise<void> {
+  useDocumentStore(pinia).open(source, 'huge.bin')
+  await flushPromises()
+}
+
+/** Rows actually on screen — the recycled pool hides its surplus by attribute. */
+function visibleRows(app: VueWrapper): number {
+  return app.findAll('.hex-row').filter((row) => !(row.element as HTMLElement).hidden).length
+}
+
+/** Force an element's measured height (happy-dom has no layout). */
+function stubHeight(app: VueWrapper, selector: string, height: number): void {
+  Object.defineProperty(app.find(selector).element, 'getBoundingClientRect', {
+    value: () => ({
+      height, width: 0, top: 0, left: 0, right: 0, bottom: height, x: 0, y: 0, toJSON() {},
+    }),
+    configurable: true,
+  })
+}
+
+describe('scrolling the whole document', () => {
+  it('scrolls the view by rows on the mouse wheel', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('wheel', { deltaY: 3, deltaMode: 1 }) // 3 lines
+    expect(store.topByteOffset).toBe(48)
+    expect(app.get('.hex-row__addr').text()).toBe(toAddress(48, 8))
+
+    await area.trigger('wheel', { deltaY: 2, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(80)
+
+    await area.trigger('wheel', { deltaY: -5, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(0)
+
+    // Wheeling up past the top clamps rather than going negative.
+    await area.trigger('wheel', { deltaY: -3, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(0)
+
+    expect(visibleRows(app)).toBe(ROWS_RENDERED)
+  })
+
+  it('converts pixel wheel deltas to rows using the row height', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    // 18 px rows (the fallback) -> 54 px is 3 rows.
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 54, deltaMode: 0 })
+    expect(store.topByteOffset).toBe(48)
+  })
+
+  it('drags the thumb to jump across gigabytes and back', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    const source = new SyntheticByteSource()
+    await openSynthetic(app, source)
+
+    // Grab past the bottom of the track: the view lands on the final screen.
+    await app.find('.virtual-scrollbar').trigger('pointerdown', { clientY: 100_000, pointerId: 1 })
+    await flushPromises()
+
+    expect(store.topByteOffset).toBe(LAST_TOP_OFFSET)
+    expect(app.get('.hex-row__addr').text()).toBe(toAddress(LAST_TOP_OFFSET, 8))
+    // Byte i holds (offset + i) & 0xff; LAST_TOP_OFFSET & 0xff === 0x80.
+    expect(app.get('.hex-row__byte').text()).toBe('80')
+    // The final screen is short — only the rows that remain.
+    expect(visibleRows(app)).toBe(125_000_000 - MAX_FIRST_ROW)
+
+    // Grab above the track: back to the top.
+    await app.find('.virtual-scrollbar').trigger('pointerdown', { clientY: -9_999, pointerId: 1 })
+    await flushPromises()
+    expect(store.topByteOffset).toBe(0)
+  })
+
+  it('keeps the thumb grabbable at 2 GB rather than shrinking to nothing', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    const thumb = app.find('.virtual-scrollbar__thumb').element as HTMLElement
+    // minThumbPx is 24 (ADR-0006); the true visible fraction here is sub-pixel.
+    expect(thumb.style.height).toBe('24px')
+  })
+
+  it('never asks the source for more than a screenful — nothing allocates the whole file', async () => {
+    const app = mountApp()
+    const source = new SyntheticByteSource()
+    await openSynthetic(app, source)
+
+    const area = app.find('.hex-viewer__row-area')
+    for (let i = 0; i < 20; i++) {
+      await area.trigger('wheel', { deltaY: 500, deltaMode: 1 })
+    }
+    await app.find('.virtual-scrollbar').trigger('pointerdown', { clientY: 50_000, pointerId: 1 })
+    await flushPromises()
+
+    expect(source.reads.length).toBeGreaterThan(0)
+    expect(source.maxReadLength).toBeLessThanOrEqual(16) // one row's bytes, never more
+    expect(source.reads.every((r) => r.offset + r.length <= source.size)).toBe(true)
+    // Total bytes ever fetched is a few screenfuls, nowhere near 2e9.
+    expect(source.bytesRead).toBeLessThan(1_000_000)
+  })
+
+  it('repaints when the row area resizes', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    expect(visibleRows(app)).toBe(ROWS_RENDERED)
+
+    stubHeight(app, '.hex-viewer__probe', 10)
+    stubHeight(app, '.hex-viewer__row-area', 100)
+    window.dispatchEvent(new Event('resize'))
+    await flushPromises()
+
+    // 100 px / 10 px rows -> 10 whole rows visible, 11 rendered.
+    expect(visibleRows(app)).toBe(11)
+  })
+
+  it('pulls a near-EOF view back through the choke point when the viewport grows', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await app.find('.virtual-scrollbar').trigger('pointerdown', { clientY: 100_000, pointerId: 1 })
+    await flushPromises()
+    expect(store.topByteOffset).toBe(LAST_TOP_OFFSET) // 40 rows fit
+
+    // Window maximised: the row area doubles, so more rows fit and the last
+    // valid top is lower. The old top must not leave a blank strip below.
+    stubHeight(app, '.hex-viewer__row-area', 18 * 80)
+    window.dispatchEvent(new Event('resize'))
+    await flushPromises()
+
+    expect(store.topByteOffset).toBe((125_000_000 - 80) * 16)
+    expect(visibleRows(app)).toBe(80)
   })
 })
