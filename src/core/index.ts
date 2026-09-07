@@ -11,6 +11,8 @@
 
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
+export { PageCache } from './PageCache'
+export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export { addressWidthFor, toAddress, toAsciiChar, toHex } from './format'
 export type { ThumbGeometry, ViewportMetrics } from './viewport'
 export {

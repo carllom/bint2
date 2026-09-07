@@ -1,4 +1,6 @@
 import type { ByteSource, ByteSourceErrorCode } from './ByteSource'
+import { PageCache } from './PageCache'
+import type { PageCacheStats } from './PageCache'
 
 /**
  * The failure a {@link ByteSource} rejects with (ADR-0001). A plain class over a
@@ -23,12 +25,12 @@ function assertReadArgs(offset: number, length: number): void {
 }
 
 /**
- * A {@link ByteSource} backed directly by a `File`, with **no page cache**:
- * every `read` slices the file afresh and `readSync` is always a miss. The page
- * cache lands later behind this same frozen contract (ADR-0001, ADR-0002);
- * keeping this implementation uncached is what keeps the first slice narrow, and
- * proving the cache drops in without touching call sites is what the freeze
- * bought.
+ * A {@link ByteSource} backed by a `File`, with a {@link PageCache} sitting
+ * behind the frozen contract (ADR-0001, ADR-0002). `read` assembles whole Pages
+ * the cache fetches with `File.slice(...).arrayBuffer()`; `readSync` is a real
+ * fast path that returns non-null whenever every covering Page is resident, so a
+ * scroll back over visited bytes paints in the same frame; `prefetch` is live
+ * API, warming the Pages around the Viewport.
  *
  * Holds the raw `File` and closes over nothing non-cloneable, so it stays
  * postable to a worker if one is ever built.
@@ -38,15 +40,29 @@ function assertReadArgs(offset: number, length: number): void {
  */
 export class FileByteSource implements ByteSource {
   readonly #file: File
+  readonly #cache: PageCache
   readonly #closeRejectors = new Set<() => void>()
   #closed = false
 
   constructor(file: File) {
     this.#file = file
+    this.#cache = new PageCache({
+      size: file.size,
+      fetchRange: (start, end) =>
+        file
+          .slice(start, end)
+          .arrayBuffer()
+          .then((buffer) => new Uint8Array(buffer)),
+    })
   }
 
   get size(): number {
     return this.#file.size
+  }
+
+  /** A developer / test surface (ADR-0002): the page cache's counters. */
+  get stats(): PageCacheStats {
+    return this.#cache.stats
   }
 
   async read(offset: number, length: number): Promise<Uint8Array> {
@@ -55,32 +71,30 @@ export class FileByteSource implements ByteSource {
       throw new ByteSourceError('source-closed')
     }
 
-    // EOF is not an error: clamp to the file and let the caller see a short
-    // (possibly empty) result. The render path needs no EOF arithmetic.
-    const start = Math.min(offset, this.size)
-    const end = Math.min(offset + length, this.size)
-
     let onClose!: () => void
     const closed = new Promise<never>((_resolve, reject) => {
       onClose = () => reject(new ByteSourceError('source-closed'))
       this.#closeRejectors.add(onClose)
     })
 
-    const io = this.#file.slice(start, end).arrayBuffer()
+    const io = this.#cache.read(offset, length)
     // If close() wins the race below, this promise is orphaned — swallow its
     // eventual settlement so a later I/O failure is not an unhandled rejection.
     io.catch(() => {})
 
     try {
-      const buffer = await Promise.race([io, closed])
+      const bytes = await Promise.race([io, closed])
       if (this.#closed) {
-        // close() landed while the slice was in flight.
+        // close() landed while the fetch was in flight.
         throw new ByteSourceError('source-closed')
       }
-      // Freshly allocated and caller-owned — never a view into anything we hold.
-      return new Uint8Array(buffer)
+      // The cache already hands back a freshly-allocated, caller-owned array.
+      return bytes
     } catch (error) {
       if (error instanceof ByteSourceError) {
+        throw error
+      }
+      if (error instanceof RangeError) {
         throw error
       }
       throw new ByteSourceError(
@@ -92,16 +106,21 @@ export class FileByteSource implements ByteSource {
     }
   }
 
-  /**
-   * Uncached: always a miss, whatever the range. The page cache milestone gives
-   * this a fast path; the args are part of the frozen contract regardless.
-   */
-  readSync(): Uint8Array | null {
-    return null
+  /** Non-null only on a full local hit (ADR-0001). Never blocks. */
+  readSync(offset: number, length: number): Uint8Array | null {
+    if (this.#closed) {
+      return null
+    }
+    return this.#cache.readSync(offset, length)
   }
 
-  /** Uncached: nothing to warm. Fire-and-forget, never throws (ADR-0001). */
-  prefetch(): void {}
+  /** Fire-and-forget, never throws (ADR-0001). No-op once closed. */
+  prefetch(offset: number, length: number): void {
+    if (this.#closed) {
+      return
+    }
+    this.#cache.prefetch(offset, length)
+  }
 
   close(): void {
     if (this.#closed) {
