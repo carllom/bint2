@@ -9,6 +9,7 @@ import {
   toByteSize,
   toHex,
   toHexString,
+  toRawText,
   toSignedByte,
 } from '../format'
 import { cursorAt, extendTo } from '../selection'
@@ -69,6 +70,31 @@ describe('toHexString', () => {
     const bytes = Uint8Array.from({ length: 32 }, (_u, i) => (i * 7 + 3) & 0xff)
     const parsed = Uint8Array.from(toHexString(bytes).split(' '), (pair) => parseInt(pair, 16))
     expect(parsed).toEqual(bytes)
+  })
+})
+
+describe('toRawText', () => {
+  it('decodes plain ASCII bytes unchanged', () => {
+    expect(toRawText(Uint8Array.of(0x68, 0x65, 0x6c, 0x6c, 0x6f))).toBe('hello')
+  })
+
+  it('is empty for an empty run', () => {
+    expect(toRawText(new Uint8Array(0))).toBe('')
+  })
+
+  it('decodes a multi-byte UTF-8 sequence as one character', () => {
+    // U+00E9 é = 0xC3 0xA9; U+1F600 😀 = 0xF0 0x9F 0x98 0x80.
+    expect(toRawText(Uint8Array.of(0x63, 0x61, 0x66, 0xc3, 0xa9))).toBe('café')
+    expect(toRawText(Uint8Array.of(0xf0, 0x9f, 0x98, 0x80))).toBe('😀')
+  })
+
+  it('replaces an undecodable byte with U+FFFD rather than dropping it', () => {
+    // 0xFF is never valid UTF-8; the run keeps its length in code points.
+    expect(toRawText(Uint8Array.of(0x41, 0xff, 0x42))).toBe('A�B')
+  })
+
+  it('keeps a leading BOM instead of silently swallowing three bytes', () => {
+    expect(toRawText(Uint8Array.of(0xef, 0xbb, 0xbf, 0x41))).toBe('﻿A')
   })
 })
 

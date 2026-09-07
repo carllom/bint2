@@ -57,6 +57,13 @@ const rowAreaEl = useTemplateRef<HTMLElement>('rowArea')
 const probeEl = useTemplateRef<HTMLElement>('probe')
 const hasSource = shallowRef(false)
 
+// The byte offset the pointer is over (#30), or `null` when it is over none.
+// Pure view ephemera — never a domain concept, so it stays local to the grid
+// and out of the store — but it is painted down the very same offset path as
+// the Selection: `paint()` hands it to the renderer as a byte index and both
+// panes mark it, distinct from the Cursor and the Selection.
+const hoveredByte = shallowRef<number | null>(null)
+
 const rowPx = shallowRef(DEFAULT_ROW_PX)
 const viewportPx = shallowRef(DEFAULT_VIEWPORT_PX)
 
@@ -104,6 +111,7 @@ function paint(): void {
     bytesPerRow: documentStore.bytesPerRow,
     addressWidth,
     selection: selectionView(),
+    hoveredByte: hoveredByte.value,
   })
 }
 
@@ -322,6 +330,7 @@ function onSourceChange(): void {
   generation += 1
   inFlight.clear()
   consecutiveReadFailures = 0
+  hoveredByte.value = null // last document's hovered byte does not carry over
   const source = documentStore.source
   hasSource.value = source !== null
   addressWidth = source ? addressWidthFor(source.size) : 8
@@ -411,6 +420,7 @@ function onPointerDown(event: PointerEvent): void {
   } else {
     documentStore.setCursor(byte) // a plain click replaces the Selection
   }
+  hoveredByte.value = null // the drag's own fill takes over from the hover mark
   selecting = true // and a drag from here keeps moving the same grabbed end
   try {
     rowAreaEl.value?.setPointerCapture(event.pointerId)
@@ -421,12 +431,21 @@ function onPointerDown(event: PointerEvent): void {
 
 function onPointerMove(event: PointerEvent): void {
   if (!selecting) {
+    // Not dragging: track the byte under the pointer for the hover mark (#30).
+    // `byteUnder` returns a byte index or `null` over a gap or the gutter, so
+    // the mark clears itself the moment the pointer leaves a byte.
+    hoveredByte.value = byteUnder(event)
     return
   }
   const byte = byteUnder(event)
   if (byte !== null) {
     documentStore.extendSelectionTo(byte)
   }
+}
+
+/** Pointer left the grid entirely — no byte is hovered any more (#30). */
+function onPointerLeave(): void {
+  hoveredByte.value = null
 }
 
 function onPointerUp(event: PointerEvent): void {
@@ -481,14 +500,24 @@ function cursorTarget(event: KeyboardEvent, from: number): number {
   }
 }
 
-/** `Ctrl+C` / `Cmd+C`, no other modifier — the copy chord (#25). */
-function isCopyChord(event: KeyboardEvent): boolean {
-  return (
-    (event.ctrlKey || event.metaKey) &&
-    !event.altKey &&
-    !event.shiftKey &&
-    event.key.toLowerCase() === 'c'
-  )
+/**
+ * The copy chords: `Ctrl+C` / `Cmd+C` copies the Selection as hex (#25),
+ * `Ctrl+Alt+C` / `Cmd+Alt+C` copies it as raw text (#30). `Shift` on either is
+ * not a copy chord. Returns which copy to run, or `null`.
+ *
+ * `Alt` rather than `Shift` for the text chord because `Ctrl+Shift+C` is the
+ * browsers' own devtools binding, which a page cannot override. Holding `Alt` /
+ * `Option` rewrites `event.key` to another glyph on some layouts (macOS
+ * `Option+C` → `ç`), so the text chord also accepts the physical `event.code`.
+ */
+function copyChordKind(event: KeyboardEvent): 'hex' | 'text' | null {
+  if (!(event.ctrlKey || event.metaKey) || event.shiftKey) {
+    return null
+  }
+  if (event.altKey) {
+    return event.key.toLowerCase() === 'c' || event.code === 'KeyC' ? 'text' : null
+  }
+  return event.key.toLowerCase() === 'c' ? 'hex' : null
 }
 
 function onKeyDown(event: KeyboardEvent): void {
@@ -496,14 +525,17 @@ function onKeyDown(event: KeyboardEvent): void {
     return
   }
 
-  // Copy the Selection as hex. Native copy is useless here — `user-select: none`
-  // over the grid means the browser has nothing to take — so intercept it and
-  // serve the byte range instead. With no Selection there is nothing to copy;
-  // leave the event alone.
-  if (isCopyChord(event)) {
+  // Copy the Selection — as hex, or as raw text on the Alt chord (#25, #30).
+  // Native copy is useless here — `user-select: none` over the grid means the
+  // browser has nothing to take — so intercept it and serve the byte range
+  // instead. With no Selection there is nothing to copy; leave the event alone.
+  const copyKind = copyChordKind(event)
+  if (copyKind !== null) {
     if (documentStore.selection !== null) {
       event.preventDefault()
-      void documentStore.copySelectionAsHex()
+      void (copyKind === 'hex'
+        ? documentStore.copySelectionAsHex()
+        : documentStore.copySelectionAsText())
     }
     return
   }
@@ -585,7 +617,16 @@ onMounted(() => {
 
   watch(() => documentStore.source, onSourceChange, { immediate: true })
   watch(() => documentStore.bytesPerRow, onBytesPerRowChange)
-  watch(() => documentStore.topByteOffset, scheduleSync) // repaint on scroll
+  watch(
+    () => documentStore.topByteOffset,
+    () => {
+      // The rows under the (still) pointer have changed, so the byte it was over
+      // no longer holds — drop the mark rather than leave it glued to an offset
+      // the pointer has scrolled off (#30). A real pointer move re-establishes it.
+      hoveredByte.value = null
+      scheduleSync() // repaint on scroll
+    },
+  )
   watch(
     () => documentStore.selection,
     (sel) => {
@@ -593,6 +634,7 @@ onMounted(() => {
       scheduleAnnounce(sel) // speak it, debounced (#27)
     },
   )
+  watch(hoveredByte, schedulePaint) // repaint as the hover mark moves (#30)
   watch(metrics, (m) => {
     // A grown viewport or a shorter row (zoom-out) lowers maxFirstRow — pull a
     // near-EOF top back through the choke point before repainting.
@@ -628,6 +670,7 @@ onBeforeUnmount(() => {
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
+      @pointerleave="onPointerLeave"
       @keydown="onKeyDown"
     >
       <span ref="probe" class="hex-viewer__probe" aria-hidden="true">00</span>
@@ -726,6 +769,14 @@ onBeforeUnmount(() => {
 
 .hex-viewer :deep(.hex-row--pending) {
   color: var(--color-fg-dim);
+}
+
+/* The byte under the pointer (#30), painted in both panes off the same byte
+   offset as the Selection. Listed before `--selected` so that when a byte is
+   both, the Selection's fill wins at equal specificity. */
+.hex-viewer :deep(.hex-row__byte--hovered),
+.hex-viewer :deep(.hex-row__char--hovered) {
+  background: var(--color-hover);
 }
 
 /* One range, painted in both panes from the same byte offsets (ADR-0003). */

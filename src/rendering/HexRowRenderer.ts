@@ -1,9 +1,10 @@
 /**
  * The renderer seam (ADR-0003, plan §4). The viewer hands {@link
- * HexRowRenderer.render} a batch of rows plus the one Selection, and never
- * reaches into the grid DOM itself; {@link HexRowRenderer.byteAtPoint} is the
- * only channel back. A canvas renderer can replace {@link DomHexRenderer} behind
- * this interface without touching the data layer.
+ * HexRowRenderer.render} a batch of rows plus the one Selection and the hovered
+ * byte, and never reaches into the grid DOM itself; {@link
+ * HexRowRenderer.byteAtPoint} is the only channel back. A canvas renderer can
+ * replace {@link DomHexRenderer} behind this interface without touching the data
+ * layer.
  *
  * Knowingly **single-range** for phase 1 — one Selection, its collapsed form
  * the Cursor, no Annotation list. Widening it when Annotations arrive is
@@ -39,6 +40,13 @@ export interface HexGridView {
   readonly addressWidth: number
   /** The one Selection, or `null` before the reader has pointed at a byte. */
   readonly selection: SelectionView | null
+  /**
+   * The byte offset the pointer is over, or `null` when it is over no byte.
+   * Marked in both panes down the same byte-offset path as {@link selection} —
+   * never from pixel geometry — and styled distinctly from the Selection and the
+   * Cursor (#30).
+   */
+  readonly hoveredByte: number | null
 }
 
 export interface HexRowRenderer {

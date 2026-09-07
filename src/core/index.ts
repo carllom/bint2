@@ -24,6 +24,7 @@ export {
   toByteSizeDetail,
   toHex,
   toHexString,
+  toRawText,
   toSignedByte,
 } from './format'
 export type { Selection, SelectionRange } from './selection'

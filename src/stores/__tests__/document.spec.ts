@@ -367,6 +367,86 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
   })
 })
 
+describe('copySelectionAsText — the Selection out of the app as raw text (#30)', () => {
+  function selectRange(store: ReturnType<typeof useDocumentStore>, start: number, focus: number) {
+    store.setCursor(start)
+    store.extendSelectionTo(focus)
+  }
+
+  /** A source serving fixed bytes through `read`; `readSync` always misses. */
+  function sourceOfBytes(bytes: number[]): ByteSource {
+    const data = Uint8Array.from(bytes)
+    return {
+      size: data.length,
+      read: (offset, length) => Promise.resolve(data.subarray(offset, offset + length)),
+      readSync: () => null,
+      prefetch: () => {},
+      close: () => {},
+    }
+  }
+
+  it('copies the Selection decoded as UTF-8 and reports success naming "text"', async () => {
+    const store = useDocumentStore()
+    // "café" — the é is the two bytes 0xC3 0xA9.
+    store.open(sourceOfBytes([0x63, 0x61, 0x66, 0xc3, 0xa9, 0x21]), 's.bin')
+    selectRange(store, 0, 4) // c a f é
+
+    const written: string[] = []
+    await store.copySelectionAsText((text) => {
+      written.push(text)
+      return Promise.resolve()
+    })
+
+    expect(written).toEqual(['café'])
+    expect(store.copyStatus).toEqual({
+      ok: true,
+      message: 'Copied 5 bytes to the clipboard as text.',
+    })
+  })
+
+  it('shares the 8 MiB cap and refusal with the hex copy — same message, nothing copied', async () => {
+    const store = useDocumentStore()
+    store.open(new RecordingSource(64 * 1024 * 1024), 'big.bin')
+    const bytes = COPY_BYTE_CAP + 512 * 1024 // 8.5 MiB
+    selectRange(store, 0, bytes - 1)
+
+    const written: string[] = []
+    await store.copySelectionAsText((text) => {
+      written.push(text)
+      return Promise.resolve()
+    })
+
+    expect(written).toEqual([])
+    expect(store.copyStatus?.ok).toBe(false)
+    expect(store.copyStatus?.message).toContain('8.0 MiB') // the cap
+    expect(store.copyStatus?.message).toContain('8.5 MiB') // the Selection's size
+    expect(store.copyStatus?.message).toMatch(/nothing was copied/i)
+  })
+
+  it('does nothing with no source or no Selection', async () => {
+    const store = useDocumentStore()
+    const writeText = vi.fn(() => Promise.resolve())
+
+    await store.copySelectionAsText(writeText) // no source
+    store.open(sourceOfBytes([1, 2, 3, 4]), 'x.bin')
+    await store.copySelectionAsText(writeText) // source, but no Selection
+
+    expect(writeText).not.toHaveBeenCalled()
+    expect(store.copyStatus).toBeNull()
+  })
+
+  it('clears the message when the Selection next moves, same as the hex copy', async () => {
+    const store = useDocumentStore()
+    store.open(sourceOfBytes([0x41, 0x42, 0x43, 0x44]), 'x.bin')
+    selectRange(store, 0, 3)
+    await store.copySelectionAsText(() => Promise.resolve())
+    expect(store.copyStatus).not.toBeNull()
+
+    store.setCursor(2)
+    expect(store.copyStatus).toBeNull()
+  })
+})
+
 describe('sourceHealth — the dead-source banner state (#26, ADR-0004)', () => {
   it('defaults to ok and resets to ok on open', () => {
     const store = useDocumentStore()

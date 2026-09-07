@@ -1155,6 +1155,151 @@ describe('Goto: exact navigation to any offset (#24)', () => {
   })
 })
 
+// --- Hover highlight (#30) ------------------------------------------------
+
+/** Absolute offsets of every `--hovered` cell in a pane. */
+function hoveredOffsets(app: VueWrapper, pane = '.hex-row__byte'): number[] {
+  return app
+    .findAll(`${pane}--hovered`)
+    .map((c) => Number((c.element as HTMLElement).dataset.offset))
+}
+
+describe('hover mark — tracing a byte across the panes (#30)', () => {
+  it('marks the hovered byte in both panes, distinct from the Cursor and the Selection', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    // A Selection over 10..13 is already on screen.
+    store.setCursor(10)
+    store.extendSelectionTo(13)
+    await flushPromises()
+
+    await area.trigger('pointermove', { ...hexPoint(7) })
+    await flushPromises()
+
+    expect(hoveredOffsets(app)).toEqual([7])
+    expect(hoveredOffsets(app, '.hex-row__char')).toEqual([7]) // same byte, other pane
+    const hovered = app.get('.hex-row__byte--hovered')
+    expect(hovered.classes()).not.toContain('hex-row__byte--cursor')
+    expect(hovered.classes()).not.toContain('hex-row__byte--selected')
+    // Hovering elsewhere has not disturbed the Selection.
+    expect(store.selection).toEqual({ anchor: 10, focus: 13 })
+    expect(selectedHexOffsets(app)).toEqual([10, 11, 12, 13])
+  })
+
+  it('resolves the hovered byte from the ASCII pane too — it is a byte index, not pixels', async () => {
+    const app = mountApp()
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+
+    await app.find('.hex-viewer__row-area').trigger('pointermove', { ...asciiPoint(9) })
+    await flushPromises()
+
+    expect(hoveredOffsets(app)).toEqual([9])
+    expect(hoveredOffsets(app, '.hex-row__char')).toEqual([9])
+  })
+
+  it('clears the highlight when the pointer moves onto a gap', async () => {
+    const app = mountApp()
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointermove', { ...hexPoint(5) })
+    await flushPromises()
+    expect(hoveredOffsets(app)).toEqual([5])
+
+    await area.trigger('pointermove', { clientX: 5_000, clientY: 5_000 })
+    await flushPromises()
+    expect(hoveredOffsets(app)).toEqual([])
+  })
+
+  it('clears the highlight when the pointer leaves the grid', async () => {
+    const app = mountApp()
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointermove', { ...hexPoint(5) })
+    await flushPromises()
+    expect(hoveredOffsets(app)).toEqual([5])
+
+    await area.trigger('pointerleave')
+    await flushPromises()
+    expect(hoveredOffsets(app)).toEqual([])
+  })
+
+  it('drops the hover mark while a drag-select is in progress — the fill takes over', async () => {
+    const app = mountApp()
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointermove', { ...hexPoint(2) })
+    await flushPromises()
+    expect(hoveredOffsets(app)).toEqual([2])
+
+    await area.trigger('pointerdown', { button: 0, pointerId: 1, ...hexPoint(2) })
+    await area.trigger('pointermove', { pointerId: 1, ...hexPoint(6) })
+    await flushPromises()
+
+    expect(hoveredOffsets(app)).toEqual([])
+    expect(selectedHexOffsets(app)).toEqual([2, 3, 4, 5, 6])
+  })
+
+  it('does not carry a hovered byte across to a newly opened document', async () => {
+    const app = mountApp()
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointermove', { ...hexPoint(5) })
+    await flushPromises()
+    expect(hoveredOffsets(app)).toEqual([5])
+
+    useDocumentStore(pinia).open(new FileByteSource(fileOf([9, 9, 9, 9])), 'other.bin')
+    await flushPromises()
+
+    expect(hoveredOffsets(app)).toEqual([])
+  })
+
+  it('drops the mark on a scroll — it does not stay glued to a byte the pointer left', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 2000 }, (_u, i) => i & 0xff),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointermove', { ...hexPoint(5) })
+    await flushPromises()
+    expect(hoveredOffsets(app)).toEqual([5])
+
+    // A wheel scroll moves the rows without the pointer moving.
+    await area.trigger('wheel', { deltaY: 3, deltaMode: 1 })
+    await flushPromises()
+
+    expect(store.topByteOffset).toBeGreaterThan(0) // the scroll happened
+    expect(hoveredOffsets(app)).toEqual([])
+  })
+})
+
 // --- Copy the Selection as hex (#25) ---------------------------------------
 
 /** A source whose `read` always rejects but whose `readSync` still answers for
@@ -1308,6 +1453,129 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('00 01 02 03 04 05 06 07')
     expect(store.copyStatus?.ok).toBe(true)
+  })
+})
+
+// --- Copy the Selection as raw text (#30) ---------------------------------
+
+async function pressCopyText(app: VueWrapper): Promise<void> {
+  await app
+    .find('.hex-viewer__row-area')
+    .trigger('keydown', { key: 'c', ctrlKey: true, altKey: true })
+  await flushPromises()
+}
+
+describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
+  it('copies the selected bytes decoded as text and announces it through the action region', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    // "hello" then padding.
+    await openFile(app, [0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x00, 0x00, 0x00])
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointerdown', { button: 0, ...hexPoint(0) })
+    await area.trigger('pointerdown', { button: 0, shiftKey: true, ...hexPoint(4) })
+    expect(store.selection).toEqual({ anchor: 0, focus: 4 })
+
+    await pressCopyText(app)
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('hello')
+    expect(store.copyStatus).toEqual({
+      ok: true,
+      message: 'Copied 5 bytes to the clipboard as text.',
+    })
+    // The existing action live region carries it — no new region (#28, #30).
+    expect(app.find('[data-field="action-live-region"]').text()).toBe(
+      'Copied 5 bytes to the clipboard as text.',
+    )
+  })
+
+  it('does nothing on Ctrl+Alt+C with no Selection', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(app, [1, 2, 3, 4])
+
+    await pressCopyText(app)
+
+    expect(writeText).not.toHaveBeenCalled()
+    expect(store.copyStatus).toBeNull()
+  })
+
+  it('refuses past the same 8 MiB cap, with the same refusal shown and spoken', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource()) // 2 GB
+
+    store.setCursor(0)
+    store.extendSelectionTo(10 * 1024 * 1024 - 1) // 10 MiB — uncapped as a Selection
+    await pressCopyText(app)
+
+    expect(writeText).not.toHaveBeenCalled()
+    expect(store.copyStatus?.ok).toBe(false)
+    expect(store.copyStatus?.message).toContain('8.0 MiB')
+    expect(store.copyStatus?.message).toMatch(/nothing was copied/i)
+    const shown = app.find('[data-field="copy-status"]')
+    expect(shown.text()).toBe(store.copyStatus!.message)
+    expect(shown.classes()).toContain('status-bar__copy--refused')
+    expect(app.find('[data-field="action-live-region"]').text()).toContain('Nothing was copied.')
+  })
+
+  it('leaves plain Ctrl+C copying hex — the two chords are distinct', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    await openFile(app, [0x41, 0x42, 0x43, 0x44])
+
+    await app.find('.hex-viewer__row-area').trigger('pointerdown', { button: 0, ...hexPoint(0) })
+    await app
+      .find('.hex-viewer__row-area')
+      .trigger('pointerdown', { button: 0, shiftKey: true, ...hexPoint(3) })
+    await pressCopy(app) // plain Ctrl+C
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('41 42 43 44')
+    expect(useDocumentStore(pinia).copyStatus?.message).toMatch(/as hex\.$/)
+  })
+
+  it('leaves Ctrl+Shift+C for the browser — it is not a copy chord', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(app, [0x41, 0x42, 0x43, 0x44])
+    store.setCursor(0)
+    store.extendSelectionTo(3)
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'C',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    app.find('.hex-viewer__row-area').element.dispatchEvent(event)
+    await flushPromises()
+
+    expect(writeText).not.toHaveBeenCalled()
+    expect(store.copyStatus).toBeNull()
+    expect(event.defaultPrevented).toBe(false) // the browser keeps its binding
+  })
+
+  it('still fires when Alt has rewritten event.key to another glyph (macOS Option+C)', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    await openFile(app, [0x68, 0x69]) // "hi"
+    const store = useDocumentStore(pinia)
+    store.setCursor(0)
+    store.extendSelectionTo(1)
+
+    await app
+      .find('.hex-viewer__row-area')
+      .trigger('keydown', { key: 'ç', code: 'KeyC', ctrlKey: true, altKey: true })
+    await flushPromises()
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('hi')
+    expect(store.copyStatus?.message).toMatch(/as text\.$/)
   })
 })
 

@@ -8,6 +8,7 @@ import {
   toByteSize,
   toByteSizeDetail,
   toHexString,
+  toRawText,
 } from '@/core'
 import type { ByteSource, Selection, ViewportMetrics } from '@/core'
 
@@ -29,7 +30,7 @@ export type BytesPerRow = (typeof BYTES_PER_ROW_PRESETS)[number]
  */
 export const COPY_BYTE_CAP = 8 * 1024 * 1024
 
-/** The outcome of the last copy attempt — what the action region reads out (#25, #28). */
+/** The outcome of the last copy attempt, hex or raw text — what the action region reads out (#25, #28, #30). */
 export interface CopyStatus {
   readonly ok: boolean
   readonly message: string
@@ -183,8 +184,14 @@ export const useDocumentStore = defineStore('document', () => {
     topByteOffset.value = clampTopOffset(target, metrics)
   }
 
+  /** Write to the real platform clipboard — the injected default for both copies. */
+  const platformWriteText = (text: string): Promise<void> => navigator.clipboard.writeText(text)
+
   /**
-   * Copy the Selection to the clipboard as a hex string (#25, plan §7).
+   * Copy the Selection to the clipboard, rendered by `render` — as hex (#25,
+   * plan §7) or as raw text (#30). The two differ only in that renderer and the
+   * word in the success message; everything that makes copy careful is shared
+   * and lives here once.
    *
    * The Selection is uncapped, but the **copy** is not: past
    * {@link COPY_BYTE_CAP} of source bytes it is **refused** with a message
@@ -201,12 +208,11 @@ export const useDocumentStore = defineStore('document', () => {
    * moves or another document opens in that window, whatever it resolves into
    * belongs to a range the reader has left, so it is dropped — no stale
    * clipboard, no stale message.
-   *
-   * `writeText` is injected so the store stays testable without a real
-   * clipboard; the default is the platform one.
    */
-  async function copySelectionAsHex(
-    writeText: (text: string) => Promise<void> = (text) => navigator.clipboard.writeText(text),
+  async function copySelection(
+    kind: 'hex' | 'text',
+    render: (bytes: Uint8Array) => string,
+    writeText: (text: string) => Promise<void>,
   ): Promise<void> {
     const src = source.value
     const sel = selection.value
@@ -251,7 +257,7 @@ export const useDocumentStore = defineStore('document', () => {
     }
 
     try {
-      await writeText(toHexString(data))
+      await writeText(render(data))
     } catch {
       if (!abandoned()) {
         copyStatus.value = { ok: false, message: 'The clipboard could not be written.' }
@@ -263,8 +269,30 @@ export const useDocumentStore = defineStore('document', () => {
     }
     copyStatus.value = {
       ok: true,
-      message: `Copied ${bytes.toLocaleString()} bytes to the clipboard as hex.`,
+      message: `Copied ${bytes.toLocaleString()} bytes to the clipboard as ${kind}.`,
     }
+  }
+
+  /**
+   * Copy the Selection as a spaced-hex string (#25) — the byte-exact form.
+   * `writeText` is injected so the store stays testable without a real
+   * clipboard; the default is the platform one.
+   */
+  function copySelectionAsHex(
+    writeText: (text: string) => Promise<void> = platformWriteText,
+  ): Promise<void> {
+    return copySelection('hex', toHexString, writeText)
+  }
+
+  /**
+   * Copy the Selection decoded as UTF-8 text (#30) — the convenience for when
+   * what is marked is an embedded string. Same cap, same refusal, same
+   * staleness guards as {@link copySelectionAsHex}; only the rendering differs.
+   */
+  function copySelectionAsText(
+    writeText: (text: string) => Promise<void> = platformWriteText,
+  ): Promise<void> {
+    return copySelection('text', toRawText, writeText)
   }
 
   /**
@@ -298,6 +326,7 @@ export const useDocumentStore = defineStore('document', () => {
     setCursor,
     extendSelectionTo,
     copySelectionAsHex,
+    copySelectionAsText,
     setSourceHealth,
   }
 })

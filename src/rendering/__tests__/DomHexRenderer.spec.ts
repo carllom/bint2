@@ -6,11 +6,14 @@ function textsOf(root: ParentNode, selector: string): (string | null)[] {
   return [...root.querySelectorAll(selector)].map((node) => node.textContent)
 }
 
-/** A grid view with `selection: null` unless overridden. */
+/** A grid view with `selection: null` and `hoveredByte: null` unless overridden. */
 function view(
-  partial: Omit<HexGridView, 'selection'> & { selection?: SelectionView | null },
+  partial: Omit<HexGridView, 'selection' | 'hoveredByte'> & {
+    selection?: SelectionView | null
+    hoveredByte?: number | null
+  },
 ): HexGridView {
-  return { selection: null, ...partial }
+  return { selection: null, hoveredByte: null, ...partial }
 }
 
 describe('DomHexRenderer', () => {
@@ -261,6 +264,70 @@ describe('DomHexRenderer', () => {
       renderer.render(view({ rows, bytesPerRow: 8, addressWidth: 8, selection: null }))
       expect(container.querySelectorAll('[class*="--selected"]')).toHaveLength(0)
       expect(container.querySelectorAll('[class*="--cursor"]')).toHaveLength(0)
+    })
+  })
+
+  describe('painting the hover mark (#30)', () => {
+    const rows = [
+      { offset: 0, bytes: new Uint8Array(8) },
+      { offset: 8, bytes: new Uint8Array(8) },
+    ]
+
+    /** `--hovered` byte offsets, read from a pane. */
+    function hoveredOffsets(pane: 'hex-row__byte' | 'hex-row__char'): number[] {
+      return [...container.querySelectorAll<HTMLElement>(`.${pane}--hovered`)].map((c) =>
+        Number(c.dataset.offset),
+      )
+    }
+
+    it('marks exactly the hovered byte, in both panes, from its offset', () => {
+      renderer.render(view({ rows, bytesPerRow: 8, addressWidth: 8, hoveredByte: 11 }))
+      expect(hoveredOffsets('hex-row__byte')).toEqual([11])
+      expect(hoveredOffsets('hex-row__char')).toEqual([11])
+    })
+
+    it('is a class distinct from --selected and --cursor', () => {
+      renderer.render(
+        view({
+          rows,
+          bytesPerRow: 8,
+          addressWidth: 8,
+          selection: { start: 0, end: 4, cursor: 3 },
+          hoveredByte: 6,
+        }),
+      )
+      const hovered = container.querySelector('.hex-row__byte--hovered')!
+      expect(hovered.getAttribute('data-offset')).toBe('6')
+      expect(hovered.classList.contains('hex-row__byte--selected')).toBe(false)
+      expect(hovered.classList.contains('hex-row__byte--cursor')).toBe(false)
+    })
+
+    it('lets a byte be both hovered and selected at once', () => {
+      renderer.render(
+        view({
+          rows,
+          bytesPerRow: 8,
+          addressWidth: 8,
+          selection: { start: 2, end: 6, cursor: 5 },
+          hoveredByte: 4,
+        }),
+      )
+      const cell = container.querySelector('.hex-row__byte[data-offset="4"]')!
+      expect(cell.classList.contains('hex-row__byte--selected')).toBe(true)
+      expect(cell.classList.contains('hex-row__byte--hovered')).toBe(true)
+    })
+
+    it('clears the stale hover mark off a recycled cell when the pointer moves', () => {
+      renderer.render(view({ rows, bytesPerRow: 8, addressWidth: 8, hoveredByte: 3 }))
+      expect(hoveredOffsets('hex-row__byte')).toEqual([3])
+
+      renderer.render(view({ rows, bytesPerRow: 8, addressWidth: 8, hoveredByte: 12 }))
+      expect(hoveredOffsets('hex-row__byte')).toEqual([12])
+    })
+
+    it('paints no hover mark when hover is null', () => {
+      renderer.render(view({ rows, bytesPerRow: 8, addressWidth: 8, hoveredByte: null }))
+      expect(container.querySelectorAll('[class*="--hovered"]')).toHaveLength(0)
     })
   })
 
