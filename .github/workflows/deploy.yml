@@ -43,9 +43,8 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Build for e2e
-        run: npm run build-only
-
+      # The Playwright webServer builds and serves `vite preview`; CI gates on
+      # chromium only (see playwright.config.ts).
       - name: Run e2e tests
         run: npm run test:e2e -- --project=chromium
 
