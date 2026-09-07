@@ -949,3 +949,207 @@ describe('keyboard drives the Cursor, pointer drives the view (#22, ADR-0003)', 
     expect(app.findAll('.hex-row__byte--cursor')).toHaveLength(0) // scrolled past
   })
 })
+
+// --- Goto: exact navigation to any offset (#24) -----------------------------
+
+/** Fire `Ctrl+G` on `window`, from wherever focus happens to be. */
+async function pressCtrlG(): Promise<void> {
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', ctrlKey: true, bubbles: true }))
+  await flushPromises()
+}
+
+async function typeOffset(app: VueWrapper, value: string): Promise<void> {
+  await app.find('#goto-box-input').setValue(value)
+  await app.find('.goto-box__form').trigger('submit')
+  await flushPromises()
+}
+
+describe('Goto: exact navigation to any offset (#24)', () => {
+  it('opens the box on Ctrl+G from anywhere in the app', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    expect(app.find('.goto-box').exists()).toBe(false)
+    await pressCtrlG()
+    expect(app.find('.goto-box').exists()).toBe(true)
+    // Focus is in the box, on the field.
+    expect(document.activeElement).toBe(app.find('#goto-box-input').element)
+  })
+
+  it('also opens on Ctrl+G while the Viewport itself has focus', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await app.find('.hex-viewer__row-area').trigger('keydown', { key: 'g', ctrlKey: true })
+    await flushPromises()
+    expect(app.find('.goto-box').exists()).toBe(true)
+  })
+
+  it('accepts a 0x-hex offset and lands both the view and the Cursor on it', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    await typeOffset(app, '0x1F40') // 8000, a row boundary
+
+    expect(store.topByteOffset).toBe(8000)
+    expect(store.selection).toEqual({ anchor: 8000, focus: 8000 })
+    expect(app.find('.goto-box').exists()).toBe(false) // closed on confirm
+  })
+
+  it('accepts a plain decimal offset', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    await typeOffset(app, '256')
+
+    expect(store.topByteOffset).toBe(256)
+    expect(store.selection).toEqual({ anchor: 256, focus: 256 })
+  })
+
+  it('routes the view through clampTopOffset — the Cursor is exact, the top is its row', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    await typeOffset(app, '0x1F45') // 8005 — mid-row
+
+    expect(store.selection!.focus).toBe(8005) // Cursor on the exact byte
+    expect(store.topByteOffset).toBe(8000) // view aligned down to the row boundary
+  })
+
+  it('clamps an out-of-range offset to the document rather than rejecting it', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+
+    await pressCtrlG()
+    await typeOffset(app, '0x9999') // far past a 64-byte file
+
+    expect(store.selection!.focus).toBe(63) // last real byte
+    expect(store.topByteOffset).toBe(0) // only one screen of rows exists
+    expect(app.find('.goto-box').exists()).toBe(false)
+  })
+
+  it('Esc closes the box without moving and returns focus to the Viewport', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 5, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(80)
+
+    await pressCtrlG()
+    await app.find('#goto-box-input').setValue('0x1F40')
+    await app.find('.goto-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(app.find('.goto-box').exists()).toBe(false)
+    expect(store.topByteOffset).toBe(80) // unmoved
+    expect(store.selection).toBeNull()
+    expect(document.activeElement).toBe(app.find('.hex-viewer__row-area').element)
+  })
+
+  it('returns focus to the Viewport on confirm too', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    await typeOffset(app, '0')
+
+    expect(document.activeElement).toBe(app.find('.hex-viewer__row-area').element)
+  })
+
+  it('traps Tab and Shift+Tab between the field and its buttons', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    const input = app.find('#goto-box-input').element
+    const cancel = app.find('.goto-box__cancel').element
+    expect(document.activeElement).toBe(input)
+
+    // Shift+Tab off the first control wraps to the last.
+    await app.find('.goto-box').trigger('keydown', { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(cancel)
+
+    // Tab off the last control wraps back to the first.
+    await app.find('.goto-box').trigger('keydown', { key: 'Tab' })
+    expect(document.activeElement).toBe(input)
+  })
+
+  it('keeps an unparseable entry in the box and moves nothing', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    await typeOffset(app, 'not-an-offset')
+
+    expect(app.find('.goto-box').exists()).toBe(true)
+    expect(app.find('#goto-box-input').attributes('aria-invalid')).toBe('true')
+    expect(store.selection).toBeNull()
+    expect(store.topByteOffset).toBe(0)
+  })
+
+  it('does not open on Ctrl+Shift+G — browser reverse-find is left alone', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'G', ctrlKey: true, shiftKey: true, bubbles: true }),
+    )
+    await flushPromises()
+
+    expect(app.find('.goto-box').exists()).toBe(false)
+  })
+
+  it('a click on the backdrop closes the box without moving and restores Viewport focus', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 5, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(80)
+
+    await pressCtrlG()
+    await app.find('.goto-box__backdrop').trigger('pointerdown')
+
+    expect(app.find('.goto-box').exists()).toBe(false)
+    expect(store.topByteOffset).toBe(80) // unmoved
+    expect(store.selection).toBeNull()
+    expect(document.activeElement).toBe(app.find('.hex-viewer__row-area').element)
+  })
+
+  it('a click inside the box leaves it open', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    await app.find('#goto-box-input').trigger('pointerdown')
+
+    expect(app.find('.goto-box').exists()).toBe(true)
+  })
+
+  it('pulls focus back to the field if it escapes the open box', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await pressCtrlG()
+    const input = app.find('#goto-box-input').element
+    expect(document.activeElement).toBe(input)
+
+    // Something steals focus while the box is still open.
+    ;(app.find('.hex-viewer__row-area').element as HTMLElement).focus()
+    await app.find('.goto-box').trigger('focusout')
+
+    expect(document.activeElement).toBe(input)
+  })
+})

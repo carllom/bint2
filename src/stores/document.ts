@@ -91,6 +91,23 @@ export const useDocumentStore = defineStore('document', () => {
   }
 
   /**
+   * Jump to an absolute byte offset — the Goto action (#24, ADR-0006). Unlike
+   * the wheel and thumb drag, this gesture also moves the Cursor: it lands the
+   * Cursor on the requested byte and the Viewport on that byte's row. An
+   * out-of-range offset is **clamped to the document** (`clampByte`), never
+   * rejected, and the view still funnels through {@link clampTopOffset} — the
+   * single navigation choke point — so Goto is not a bypass.
+   */
+  function gotoOffset(offset: number, metrics: ViewportMetrics): void {
+    if (source.value === null || fileSize.value === 0) {
+      return
+    }
+    const target = clampByte(offset)
+    selection.value = cursorAt(target)
+    topByteOffset.value = clampTopOffset(target, metrics)
+  }
+
+  /**
    * Reshape the grid to `next` bytes per row (#19, ADR-0006). Only the preset
    * changes here; `topByteOffset` is realigned to the new row width by the
    * Viewport, which funnels the current offset back through {@link
@@ -114,6 +131,7 @@ export const useDocumentStore = defineStore('document', () => {
     selection,
     open,
     scrollTo,
+    gotoOffset,
     setBytesPerRow,
     setCursor,
     extendSelectionTo,
