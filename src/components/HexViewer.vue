@@ -25,10 +25,6 @@ const MIN_THUMB_PX = 24 // ADR-0006 default, pinned by the viewport spec
 // only until the probe renders; overwritten by the first real measurement.
 const DEFAULT_ROW_PX = 18
 const DEFAULT_VIEWPORT_PX = DEFAULT_ROW_PX * 40
-// Row bytes kept around a scroll so returning to them repaints without a `··`
-// flash (user story 21). A stopgap: the real page cache (#20) lands below the
-// ByteSource seam and makes `readSync` the fast path.
-const RETAINED_ROWS_CAP = 512
 
 const documentStore = useDocumentStore()
 const gridEl = useTemplateRef<HTMLElement>('grid')
@@ -56,7 +52,9 @@ let addressWidth = 8
 // is dropped rather than painted (plan §4).
 let generation = 0
 let paintQueued = false
-const retained = new Map<number, Uint8Array>()
+// Rows whose async `read` is outstanding — deduplicates requests within a burst
+// of settling scrolls. Bytes the reader returns to are served synchronously by
+// the page cache's `readSync` below the ByteSource seam (#20), not held here.
 const inFlight = new Set<number>()
 
 function paint(): void {
@@ -86,25 +84,10 @@ function measure(): void {
   }
 }
 
-/**
- * Keep a row's bytes at the most-recently-used end of {@link retained} and evict
- * from the least-recently-used end. Visible rows are refreshed to MRU on every
- * `syncRows`, and the cap is far larger than any screenful, so eviction never
- * reaches a row that is currently on screen.
- */
-function retain(offset: number, bytes: Uint8Array): void {
-  retained.delete(offset)
-  retained.set(offset, bytes)
-  while (retained.size > RETAINED_ROWS_CAP) {
-    retained.delete(retained.keys().next().value!)
-  }
-}
-
 function applyBytes(offset: number, bytes: Uint8Array, gen: number): void {
   if (gen !== generation) {
     return // a newer document opened; this read is stale
   }
-  retain(offset, bytes)
   const index = rows.findIndex((row) => row.offset === offset)
   if (index !== -1) {
     rows[index] = { offset, bytes }
@@ -186,19 +169,26 @@ function syncRows(): void {
 
   rows = Array.from({ length: count }, (_unused, index) => {
     const offset = offsetOfRow(firstRow + index, bytesPerRow)
-    const cached = retained.get(offset)
-    if (cached !== undefined) {
-      retain(offset, cached) // a visible row is always most-recently-used
-    }
-    return { offset, bytes: cached ?? null }
+    const length = Math.min(bytesPerRow, source.size - offset)
+    // `readSync` is the page cache's fast path (#20): a scroll back over bytes
+    // already visited paints from resident Pages in this same frame, no `··`.
+    return { offset, bytes: source.readSync(offset, length) }
   })
   paint() // resident rows and placeholders now; arrivals repaint
+
+  // One prefetch per scroll settle with the visible span; the cache expands it
+  // to covering Pages ±1, clamped to size (ADR-0002).
+  if (count > 0) {
+    const last = rows[count - 1]!
+    const spanEnd = last.offset + Math.min(bytesPerRow, source.size - last.offset)
+    source.prefetch(rows[0]!.offset, spanEnd - rows[0]!.offset)
+  }
+
   requestRows(generation)
 }
 
 function onSourceChange(): void {
   generation += 1
-  retained.clear()
   inFlight.clear()
   const source = documentStore.source
   hasSource.value = source !== null
@@ -208,15 +198,14 @@ function onSourceChange(): void {
 }
 
 /**
- * A bytes-per-row change reshapes the grid (#19). Every retained row was cut to
- * the old width and sits at an offset the new row boundaries no longer hit, so
- * drop the lot and bump the generation — rows repaint at the new column count
- * from fresh reads rather than from a stale-width slice. The metrics watcher
+ * A bytes-per-row change reshapes the grid (#19). Old-width rows sit at offsets
+ * the new row boundaries no longer hit, so bump the generation and drop the
+ * in-flight set — rows repaint at the new column count, served from the page
+ * cache by byte range (the cache is width-agnostic). The metrics watcher
  * realigns `topByteOffset` through `clampTopOffset` and schedules the repaint.
  */
 function onBytesPerRowChange(): void {
   generation += 1
-  retained.clear()
   inFlight.clear()
 }
 

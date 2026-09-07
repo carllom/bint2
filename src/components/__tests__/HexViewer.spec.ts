@@ -406,6 +406,41 @@ describe('scrolling the whole document', () => {
     expect(source.bytesRead).toBeLessThan(1_000_000)
   })
 
+  it('repaints a scroll back over visited bytes from the page cache — no ·· flash (#20)', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+
+    // Three 64 KiB pages, so scrolling forward faults pages the reader then
+    // returns to.
+    const raw = new Uint8Array(192 * 1024)
+    for (let i = 0; i < raw.length; i++) raw[i] = i & 0xff
+    const source = new FileByteSource(new File([raw], 'big.bin'))
+    const readSpy = vi.spyOn(source, 'read')
+
+    store.open(source, 'big.bin')
+    await flushPromises()
+    expect(app.findAll('.hex-row--pending')).toHaveLength(0)
+
+    const area = app.find('.hex-viewer__row-area')
+    await area.trigger('wheel', { deltaY: 5000, deltaMode: 1 }) // into page 1
+    await flushPromises()
+    await area.trigger('wheel', { deltaY: 4000, deltaMode: 1 }) // into page 2
+    await flushPromises()
+    expect(store.topByteOffset).toBe(9000 * 16)
+    expect(app.findAll('.hex-row--pending')).toHaveLength(0)
+
+    readSpy.mockClear()
+    await area.trigger('wheel', { deltaY: -9000, deltaMode: 1 }) // all the way back
+    await flushPromises()
+
+    // Page 0 is still resident, so the rows paint straight from `readSync` with
+    // no placeholder and without another async read.
+    expect(store.topByteOffset).toBe(0)
+    expect(app.findAll('.hex-row--pending')).toHaveLength(0)
+    expect(bytesText(app).slice(0, 4)).toEqual(['00', '01', '02', '03'])
+    expect(readSpy).not.toHaveBeenCalled()
+  })
+
   it('repaints when the row area resizes', async () => {
     const app = mountApp()
     await openSynthetic(app, new SyntheticByteSource())

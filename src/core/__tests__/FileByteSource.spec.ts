@@ -52,9 +52,30 @@ describe('FileByteSource', () => {
     expect(second[0]).toBe(0)
   })
 
-  it('readSync is always a miss', () => {
-    const source: ByteSource = new FileByteSource(syntheticFile(64))
-    expect(source.readSync(0, 16)).toBeNull()
+  it('readSync misses until the covering bytes are resident, then hits', async () => {
+    const source: ByteSource = new FileByteSource(syntheticFile(512))
+    expect(source.readSync(300, 16)).toBeNull() // cold
+
+    await source.read(300, 16)
+
+    const hit = source.readSync(300, 16)
+    expect(hit).not.toBeNull()
+    expect(Array.from(hit!)).toEqual(Array.from({ length: 16 }, (_u, i) => (300 + i) & 0xff))
+    // A hit is a fresh, caller-owned copy — mutating it must not poison the cache.
+    hit![0] = 0xff
+    expect(source.readSync(300, 16)![0]).toBe(300 & 0xff)
+  })
+
+  it('prefetch warms the bytes so a later readSync hits without an await', async () => {
+    const source: ByteSource = new FileByteSource(syntheticFile(4096))
+    source.prefetch(1000, 64)
+
+    // The fetch is async; give it a turn of the event loop to settle.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const hit = source.readSync(1000, 64)
+    expect(hit).not.toBeNull()
+    expect(Array.from(hit!)).toEqual(Array.from({ length: 64 }, (_u, i) => (1000 + i) & 0xff))
   })
 
   it('prefetch returns void and never throws', () => {
