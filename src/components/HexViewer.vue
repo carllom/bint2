@@ -2,15 +2,17 @@
 import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 import {
   addressWidthFor,
+  isCollapsed,
   offsetFromThumbPixel,
   offsetOfRow,
+  rangeOf,
   rowCount,
   rowOfOffset,
   visibleRows,
 } from '@/core'
 import type { ViewportMetrics } from '@/core'
 import { DomHexRenderer } from '@/rendering'
-import type { HexRowView } from '@/rendering'
+import type { HexRowView, SelectionView } from '@/rendering'
 import VirtualScrollbar from '@/components/VirtualScrollbar.vue'
 import { useDocumentStore } from '@/stores/document'
 
@@ -58,7 +60,31 @@ let paintQueued = false
 const inFlight = new Set<number>()
 
 function paint(): void {
-  renderer?.render({ rows, bytesPerRow: documentStore.bytesPerRow, addressWidth })
+  renderer?.render({
+    rows,
+    bytesPerRow: documentStore.bytesPerRow,
+    addressWidth,
+    selection: selectionView(),
+  })
+}
+
+/**
+ * Resolve the store's one Selection (CONTEXT.md, ADR-0003) to what the grid
+ * paints: a half-open byte range and the focus byte. Both panes highlight from
+ * this range — the linked hex↔ASCII highlight is a consequence, not a feature.
+ */
+function selectionView(): SelectionView | null {
+  const sel = documentStore.selection
+  if (sel === null) {
+    return null
+  }
+  // A collapsed Selection is the Cursor: an empty fill range `[focus, focus)`,
+  // with the marker still on `focus`.
+  if (isCollapsed(sel)) {
+    return { start: sel.focus, end: sel.focus, cursor: sel.focus }
+  }
+  const { start, end } = rangeOf(sel)
+  return { start, end, cursor: sel.focus }
 }
 
 /** Coalesce a burst of settling reads into one repaint per tick. */
@@ -244,6 +270,152 @@ function onScrollToPixel(thumbTopPx: number): void {
   documentStore.scrollTo(offsetFromThumbPixel(thumbTopPx, metrics.value), metrics.value)
 }
 
+// The pointer drives the Selection only, never the view (ADR-0003). A plain
+// press puts the Cursor; Shift+press extends the current Selection to the
+// pressed byte. Either way the press starts a drag that keeps extending.
+// `byteAtPoint` returns a byte index, so half a byte can never be selected.
+let selecting = false
+
+function byteUnder(event: PointerEvent): number | null {
+  return renderer?.byteAtPoint(event.clientX, event.clientY) ?? null
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (!hasSource.value || event.button !== 0) {
+    return
+  }
+  rowAreaEl.value?.focus()
+  const byte = byteUnder(event)
+  if (byte === null) {
+    return // pressed the gutter or a gap — nothing to point at
+  }
+  event.preventDefault()
+  if (event.shiftKey) {
+    documentStore.extendSelectionTo(byte)
+  } else {
+    documentStore.setCursor(byte) // a plain click replaces the Selection
+  }
+  selecting = true // and a drag from here keeps moving the same grabbed end
+  try {
+    rowAreaEl.value?.setPointerCapture(event.pointerId)
+  } catch {
+    // No pointer-capture support here — the drag still works via bubbling.
+  }
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (!selecting) {
+    return
+  }
+  const byte = byteUnder(event)
+  if (byte !== null) {
+    documentStore.extendSelectionTo(byte)
+  }
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (!selecting) {
+    return
+  }
+  selecting = false
+  try {
+    rowAreaEl.value?.releasePointerCapture(event.pointerId)
+  } catch {
+    // as above
+  }
+}
+
+// The keyboard drives the Cursor; the view then follows minimally (ADR-0003).
+// Wheel and thumb drag stay view-only and may leave the Cursor off-screen.
+const CURSOR_KEYS = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'PageUp',
+  'PageDown',
+  'Home',
+  'End',
+])
+
+/** The byte a cursor key walks to, given the current focus `from`. */
+function cursorTarget(event: KeyboardEvent, from: number): number {
+  const bpr = documentStore.bytesPerRow
+  const rowStart = from - (from % bpr)
+  const toDocument = event.ctrlKey || event.metaKey
+  switch (event.key) {
+    case 'ArrowLeft':
+      return from - 1
+    case 'ArrowRight':
+      return from + 1
+    case 'ArrowUp':
+      return from - bpr
+    case 'ArrowDown':
+      return from + bpr
+    case 'PageUp':
+      return from - visibleRows(metrics.value) * bpr
+    case 'PageDown':
+      return from + visibleRows(metrics.value) * bpr
+    case 'Home':
+      return toDocument ? 0 : rowStart
+    case 'End':
+      return toDocument ? documentStore.fileSize - 1 : rowStart + bpr - 1
+    default:
+      return from
+  }
+}
+
+function onKeyDown(event: KeyboardEvent): void {
+  if (!hasSource.value || documentStore.fileSize === 0 || !CURSOR_KEYS.has(event.key)) {
+    return
+  }
+  event.preventDefault()
+
+  // With no Selection yet, the first cursor key only reveals the Cursor on the
+  // first visible byte — it does not walk. Plain and Shift behave the same way,
+  // so a following Shift+arrow extends from a real anchor.
+  if (documentStore.selection === null) {
+    documentStore.setCursor(documentStore.topByteOffset)
+    return
+  }
+
+  const m = metrics.value
+  const from = documentStore.selection.focus
+  const target = cursorTarget(event, from)
+  if (event.shiftKey) {
+    documentStore.extendSelectionTo(target) // Shift+arrows extend the grabbed end
+  } else {
+    documentStore.setCursor(target)
+  }
+
+  // PageUp/PageDown are a page jump, not a nudge — carry the view with the
+  // Cursor so it keeps its place on screen. Every other key lets the view
+  // follow minimally, or not at all if the Cursor stays visible.
+  if (event.key === 'PageDown' || event.key === 'PageUp') {
+    const pageRows = event.key === 'PageDown' ? visibleRows(m) : -visibleRows(m)
+    documentStore.scrollTo(documentStore.topByteOffset + pageRows * m.bytesPerRow, m)
+  }
+  revealOffset(documentStore.selection.focus)
+}
+
+/** Scroll the least amount that brings `offset`'s row fully into view (ADR-0003). */
+function revealOffset(offset: number): void {
+  const m = metrics.value
+  const bpr = m.bytesPerRow
+  const targetRow = rowOfOffset(offset, bpr)
+  const firstRow = rowOfOffset(documentStore.topByteOffset, bpr)
+  const fit = visibleRows(m)
+  let newFirst = firstRow
+  if (targetRow < firstRow) {
+    newFirst = targetRow
+  } else if (targetRow >= firstRow + fit) {
+    newFirst = targetRow - fit + 1
+  }
+  if (newFirst !== firstRow) {
+    documentStore.scrollTo(offsetOfRow(newFirst, bpr), m)
+  }
+}
+
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
@@ -263,6 +435,7 @@ onMounted(() => {
   watch(() => documentStore.source, onSourceChange, { immediate: true })
   watch(() => documentStore.bytesPerRow, onBytesPerRowChange)
   watch(() => documentStore.topByteOffset, scheduleSync) // repaint on scroll
+  watch(() => documentStore.selection, schedulePaint) // repaint on Cursor / Selection move
   watch(metrics, (m) => {
     // A grown viewport or a shorter row (zoom-out) lowers maxFirstRow — pull a
     // near-EOF top back through the choke point before repainting.
@@ -284,7 +457,16 @@ onBeforeUnmount(() => {
     <p v-if="!hasSource" class="hex-viewer__empty">
       No file open. Use “Open file…” or drop a file onto the window.
     </p>
-    <div ref="rowArea" class="hex-viewer__row-area" @wheel.prevent="onWheel">
+    <div
+      ref="rowArea"
+      class="hex-viewer__row-area"
+      tabindex="0"
+      @wheel.prevent="onWheel"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @keydown="onKeyDown"
+    >
       <span ref="probe" class="hex-viewer__probe" aria-hidden="true">00</span>
       <div ref="grid" class="hex-viewer__grid" />
     </div>
@@ -361,5 +543,19 @@ onBeforeUnmount(() => {
 
 .hex-viewer :deep(.hex-row--pending) {
   color: var(--color-fg-dim);
+}
+
+/* One range, painted in both panes from the same byte offsets (ADR-0003). */
+.hex-viewer :deep(.hex-row__byte--selected),
+.hex-viewer :deep(.hex-row__char--selected) {
+  background: var(--color-selection);
+  color: var(--color-selection-fg);
+}
+
+/* The focus byte — the Cursor, whether or not the range spans bytes. */
+.hex-viewer :deep(.hex-row__byte--cursor),
+.hex-viewer :deep(.hex-row__char--cursor) {
+  outline: 1px solid var(--color-cursor);
+  outline-offset: -1px;
 }
 </style>

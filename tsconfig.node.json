@@ -14,6 +14,12 @@
     "module": "preserve",
     "moduleResolution": "bundler",
 
+    // The config files reference each other with explicit `.ts` extensions
+    // (e.g. vitest.config.ts imports `./vite.config.ts`), which Vite's native
+    // config loader requires. Nothing here is emitted (`noEmit`), so allowing
+    // the extension in import paths is safe.
+    "allowImportingTsExtensions": true,
+
     // Include Node.js types and avoid accidentally including other `@types/*` packages.
     "types": ["node"],
 
