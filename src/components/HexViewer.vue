@@ -207,6 +207,19 @@ function onSourceChange(): void {
   syncRows()
 }
 
+/**
+ * A bytes-per-row change reshapes the grid (#19). Every retained row was cut to
+ * the old width and sits at an offset the new row boundaries no longer hit, so
+ * drop the lot and bump the generation — rows repaint at the new column count
+ * from fresh reads rather than from a stale-width slice. The metrics watcher
+ * realigns `topByteOffset` through `clampTopOffset` and schedules the repaint.
+ */
+function onBytesPerRowChange(): void {
+  generation += 1
+  retained.clear()
+  inFlight.clear()
+}
+
 let wheelAccum = 0
 
 function wheelRows(event: WheelEvent): number {
@@ -259,6 +272,7 @@ onMounted(() => {
   window.addEventListener('resize', measure)
 
   watch(() => documentStore.source, onSourceChange, { immediate: true })
+  watch(() => documentStore.bytesPerRow, onBytesPerRowChange)
   watch(() => documentStore.topByteOffset, scheduleSync) // repaint on scroll
   watch(metrics, (m) => {
     // A grown viewport or a shorter row (zoom-out) lowers maxFirstRow — pull a

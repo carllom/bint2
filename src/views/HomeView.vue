@@ -2,6 +2,7 @@
 // Phase-1 app shell. The toolbar carries the file-open control and the viewport
 // carries the hex grid; the dead-source banner and status bar are populated at
 // M5 (see docs/plan-phase1.md).
+import BytesPerRowControl from '@/components/BytesPerRowControl.vue'
 import FileDropZone from '@/components/FileDropZone.vue'
 import HexViewer from '@/components/HexViewer.vue'
 </script>
@@ -10,6 +11,7 @@ import HexViewer from '@/components/HexViewer.vue'
   <div class="app-shell">
     <header class="app-shell__toolbar" data-region="toolbar">
       <FileDropZone />
+      <BytesPerRowControl />
     </header>
     <!-- Populated only when the open document becomes a dead source (ADR-0004);
          zero-height otherwise, so it is not persistent chrome. -->
@@ -36,6 +38,8 @@ import HexViewer from '@/components/HexViewer.vue'
 }
 
 .app-shell__toolbar {
+  display: flex;
+  align-items: center;
   border-bottom: 1px solid var(--color-border);
 }
 
