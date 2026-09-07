@@ -366,8 +366,34 @@ function cursorTarget(event: KeyboardEvent, from: number): number {
   }
 }
 
+/** `Ctrl+C` / `Cmd+C`, no other modifier — the copy chord (#25). */
+function isCopyChord(event: KeyboardEvent): boolean {
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === 'c'
+  )
+}
+
 function onKeyDown(event: KeyboardEvent): void {
-  if (!hasSource.value || documentStore.fileSize === 0 || !CURSOR_KEYS.has(event.key)) {
+  if (!hasSource.value || documentStore.fileSize === 0) {
+    return
+  }
+
+  // Copy the Selection as hex. Native copy is useless here — `user-select: none`
+  // over the grid means the browser has nothing to take — so intercept it and
+  // serve the byte range instead. With no Selection there is nothing to copy;
+  // leave the event alone.
+  if (isCopyChord(event)) {
+    if (documentStore.selection !== null) {
+      event.preventDefault()
+      void documentStore.copySelectionAsHex()
+    }
+    return
+  }
+
+  if (!CURSOR_KEYS.has(event.key)) {
     return
   }
   event.preventDefault()

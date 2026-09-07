@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
-import { ref, shallowRef } from 'vue'
-import { clampTopOffset, cursorAt, extendTo } from '@/core'
+import { ref, shallowRef, watch } from 'vue'
+import { clampTopOffset, cursorAt, extendTo, rangeOf, toByteSize, toHexString } from '@/core'
 import type { ByteSource, Selection, ViewportMetrics } from '@/core'
 
 /**
@@ -11,6 +11,21 @@ import type { ByteSource, Selection, ViewportMetrics } from '@/core'
  */
 export const BYTES_PER_ROW_PRESETS = [8, 16, 24, 32] as const
 export type BytesPerRow = (typeof BYTES_PER_ROW_PRESETS)[number]
+
+/**
+ * The copy cap: **8 MiB of source bytes**, counted on the Selection's own
+ * extent, never on the hex output (#25, ADR-0003). The Selection itself is
+ * uncapped — marking a huge region is always allowed — but copying past this is
+ * **refused**, not truncated: a silently short result is the exact bug this tool
+ * exists to catch.
+ */
+export const COPY_BYTE_CAP = 8 * 1024 * 1024
+
+/** The outcome of the last copy attempt — what the action region reads out (#25, #28). */
+export interface CopyStatus {
+  readonly ok: boolean
+  readonly message: string
+}
 
 /**
  * The open document: its {@link ByteSource}, its identity, and where the
@@ -39,6 +54,25 @@ export const useDocumentStore = defineStore('document', () => {
   // not survive the document being closed.
   const selection = shallowRef<Selection | null>(null)
 
+  // The last copy's success / refusal message. Transient: cleared when the
+  // Selection moves or another document opens, so a stale "Copied …" never
+  // lingers. Held here, not in a component, so the visible status bar and the
+  // accessibility action region (#28) read the one source.
+  const copyStatus = shallowRef<CopyStatus | null>(null)
+
+  // A copy message reports on the Selection it was made from; the moment that
+  // Selection moves, the message is stale. (Opening a document is handled in
+  // `open`, which nulls the Selection and the message together.)
+  watch(
+    selection,
+    (next, prev) => {
+      if (prev !== null && next !== prev) {
+        copyStatus.value = null
+      }
+    },
+    { flush: 'sync' },
+  )
+
   function open(next: ByteSource, name: string): void {
     source.value?.close()
     source.value = next
@@ -46,6 +80,7 @@ export const useDocumentStore = defineStore('document', () => {
     fileSize.value = next.size
     topByteOffset.value = 0
     selection.value = null
+    copyStatus.value = null
   }
 
   /** Snap an arbitrary offset onto a real byte `[0, size - 1]`. */
@@ -108,6 +143,90 @@ export const useDocumentStore = defineStore('document', () => {
   }
 
   /**
+   * Copy the Selection to the clipboard as a hex string (#25, plan §7).
+   *
+   * The Selection is uncapped, but the **copy** is not: past
+   * {@link COPY_BYTE_CAP} of source bytes it is **refused** with a message
+   * naming both the cap and the Selection's size, and nothing reaches the
+   * clipboard — never a silently truncated result.
+   *
+   * The bytes are taken in **one** `read` call, which the page cache serves as a
+   * Direct read once it is over its threshold (ADR-0002): the copy populates no
+   * Pages and cannot flush the working set. Resident bytes are taken straight
+   * from `readSync` first, so a wholly-resident Selection still copies after the
+   * source has become a dead source.
+   *
+   * The `read` can suspend for the length of a Direct read; if the Selection
+   * moves or another document opens in that window, whatever it resolves into
+   * belongs to a range the reader has left, so it is dropped — no stale
+   * clipboard, no stale message.
+   *
+   * `writeText` is injected so the store stays testable without a real
+   * clipboard; the default is the platform one.
+   */
+  async function copySelectionAsHex(
+    writeText: (text: string) => Promise<void> = (text) => navigator.clipboard.writeText(text),
+  ): Promise<void> {
+    const src = source.value
+    const sel = selection.value
+    if (src === null || sel === null || fileSize.value === 0) {
+      return
+    }
+    // True once the copy's context is gone — a different source, or a moved
+    // Selection. `rangeOf` offsets are already byte-clamped by the store, so
+    // `end - start` needs no further clamping and is always ≥ 1.
+    const abandoned = (): boolean => source.value !== src || selection.value !== sel
+
+    const { start, end } = rangeOf(sel)
+    const bytes = end - start
+
+    if (bytes > COPY_BYTE_CAP) {
+      copyStatus.value = {
+        ok: false,
+        message:
+          `Selection is ${toByteSize(bytes)} (${bytes.toLocaleString()} bytes) — ` +
+          `over the ${toByteSize(COPY_BYTE_CAP)} copy limit. Nothing was copied.`,
+      }
+      return
+    }
+
+    // Resident bytes first: no fetch, nothing populated, and it still works once
+    // the source is dead. Otherwise one `read` — a Direct read past the cache's
+    // threshold — which also populates nothing.
+    let data = src.readSync(start, bytes)
+    if (data === null) {
+      try {
+        data = await src.read(start, bytes)
+      } catch {
+        data = src.readSync(start, bytes) // died in flight, but maybe resident
+      }
+      if (abandoned()) {
+        return
+      }
+    }
+    if (data === null || data.length < bytes) {
+      copyStatus.value = { ok: false, message: 'Selection could not be read. Nothing was copied.' }
+      return
+    }
+
+    try {
+      await writeText(toHexString(data))
+    } catch {
+      if (!abandoned()) {
+        copyStatus.value = { ok: false, message: 'The clipboard could not be written.' }
+      }
+      return
+    }
+    if (abandoned()) {
+      return
+    }
+    copyStatus.value = {
+      ok: true,
+      message: `Copied ${bytes.toLocaleString()} bytes to the clipboard as hex.`,
+    }
+  }
+
+  /**
    * Reshape the grid to `next` bytes per row (#19, ADR-0006). Only the preset
    * changes here; `topByteOffset` is realigned to the new row width by the
    * Viewport, which funnels the current offset back through {@link
@@ -129,11 +248,13 @@ export const useDocumentStore = defineStore('document', () => {
     topByteOffset,
     bytesPerRow,
     selection,
+    copyStatus,
     open,
     scrollTo,
     gotoOffset,
     setBytesPerRow,
     setCursor,
     extendSelectionTo,
+    copySelectionAsHex,
   }
 })

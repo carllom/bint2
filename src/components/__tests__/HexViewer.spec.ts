@@ -129,6 +129,7 @@ beforeEach(() => {
 afterEach(() => {
   wrapper?.unmount()
   wrapper = null
+  vi.restoreAllMocks()
 })
 
 describe('the app shell, mounted whole', () => {
@@ -1151,5 +1152,161 @@ describe('Goto: exact navigation to any offset (#24)', () => {
     await app.find('.goto-box').trigger('focusout')
 
     expect(document.activeElement).toBe(input)
+  })
+})
+
+// --- Copy the Selection as hex (#25) ---------------------------------------
+
+/** A source whose `read` always rejects but whose `readSync` still answers for
+ *  bytes that were resident when it died — the dead-source case for copy. */
+class DeadButResidentSource implements ByteSource {
+  readonly size = 4096
+  readonly #residentEnd = 64
+  read(): Promise<Uint8Array> {
+    return Promise.reject(new Error('source-gone'))
+  }
+  readSync(offset: number, length: number): Uint8Array | null {
+    if (offset + length > this.#residentEnd) return null
+    return Uint8Array.from({ length }, (_u, i) => (offset + i) & 0xff)
+  }
+  prefetch(): void {}
+  close(): void {}
+}
+
+async function pressCopy(app: VueWrapper): Promise<void> {
+  await app.find('.hex-viewer__row-area').trigger('keydown', { key: 'c', ctrlKey: true })
+  await flushPromises()
+}
+
+describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
+  it('copies a shift-selected range to the clipboard as a spaced-hex string, and says so', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    // The keyboard-only path: point, then Shift+click to extend, then copy.
+    await area.trigger('pointerdown', { button: 0, ...hexPoint(2) })
+    await area.trigger('pointerdown', { button: 0, shiftKey: true, ...hexPoint(6) })
+    expect(store.selection).toEqual({ anchor: 2, focus: 6 })
+
+    await pressCopy(app)
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('02 03 04 05 06')
+    expect(store.copyStatus).toEqual({
+      ok: true,
+      message: 'Copied 5 bytes to the clipboard as hex.',
+    })
+    // And it is shown in the status bar (not a live region — that is #28).
+    expect(app.find('[data-field="copy-status"]').text()).toBe(
+      'Copied 5 bytes to the clipboard as hex.',
+    )
+  })
+
+  it('copies a collapsed Cursor as its single byte', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    await openFile(
+      app,
+      Array.from({ length: 16 }, (_u, i) => 0x40 + i),
+    )
+
+    await app.find('.hex-viewer__row-area').trigger('pointerdown', { button: 0, ...hexPoint(3) })
+    await pressCopy(app)
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('43')
+  })
+
+  it('does nothing on Ctrl+C with no Selection', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(app, [1, 2, 3, 4])
+
+    await pressCopy(app)
+
+    expect(writeText).not.toHaveBeenCalled()
+    expect(store.copyStatus).toBeNull()
+  })
+
+  it('refuses a Selection over 8 MiB of source bytes — wording names the cap and the size, nothing is copied', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource()) // 2 GB
+
+    // The Selection itself is uncapped — marking 10 MiB is not blocked.
+    store.setCursor(0)
+    store.extendSelectionTo(10 * 1024 * 1024 - 1)
+    expect(store.selection).toEqual({ anchor: 0, focus: 10 * 1024 * 1024 - 1 })
+
+    await pressCopy(app)
+
+    expect(writeText).not.toHaveBeenCalled()
+    expect(store.copyStatus?.ok).toBe(false)
+    const message = store.copyStatus!.message
+    expect(message).toContain('10.0 MiB') // the Selection's size
+    expect(message).toContain((10 * 1024 * 1024).toLocaleString()) // exactly
+    expect(message).toContain('8.0 MiB') // the cap
+    expect(message).toMatch(/nothing was copied/i)
+    // The refusal is shown, marked as a refusal.
+    const shown = app.find('[data-field="copy-status"]')
+    expect(shown.text()).toBe(message)
+    expect(shown.classes()).toContain('status-bar__copy--refused')
+  })
+
+  it('serves the copy as a Direct read — the working set is not flushed and nothing new is populated', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+
+    // 17 pages (64 KiB each) — a whole-file copy is 1_114_112 bytes, over the
+    // cache's 1 MiB Direct-read threshold.
+    const size = 1024 * 1024 + 64 * 1024
+    const raw = new Uint8Array(size)
+    for (let i = 0; i < size; i++) raw[i] = i & 0xff
+    const source = new FileByteSource(new File([raw], 'big.bin'))
+
+    store.open(source, 'big.bin')
+    await flushPromises()
+
+    store.setCursor(0)
+    store.extendSelectionTo(size - 1)
+    await flushPromises() // let the status bar's point read of the focus byte settle
+
+    // A handful of Pages resident — the first screen, prefetch, the Cursor's
+    // byte — nowhere near the 17 the whole file spans.
+    const residentBefore = source.stats.pagesResident
+    expect(residentBefore).toBeGreaterThan(0)
+    expect(residentBefore).toBeLessThan(6)
+
+    await pressCopy(app)
+
+    const arg = writeText.mock.calls[0]![0] as string
+    expect(arg.startsWith('00 01 02 03 04 05 06 07')).toBe(true)
+    expect(arg.split(' ')).toHaveLength(size) // every source byte, none dropped
+    // The Direct read consulted resident Pages but populated none: the working
+    // set the reader built is exactly as it was — a 1 MiB copy did not flush it.
+    expect(source.stats.pagesResident).toBe(residentBefore)
+  })
+
+  it('still copies a wholly-resident Selection after the source has died', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+
+    store.open(new DeadButResidentSource(), 'dead.bin')
+    await flushPromises()
+
+    store.setCursor(0)
+    store.extendSelectionTo(7) // inside the bytes that were resident when it died
+    await pressCopy(app)
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('00 01 02 03 04 05 06 07')
+    expect(store.copyStatus?.ok).toBe(true)
   })
 })

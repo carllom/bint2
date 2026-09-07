@@ -7,6 +7,7 @@ import {
   toBinary,
   toByteSize,
   toHex,
+  toHexString,
   toSignedByte,
 } from '../format'
 
@@ -42,6 +43,30 @@ describe('toAsciiChar', () => {
     [0xff, '.'],
   ])('toAsciiChar(%i) === %j', (byte, expected) => {
     expect(toAsciiChar(byte)).toBe(expected)
+  })
+})
+
+describe('toHexString', () => {
+  it('joins uppercase byte pairs with a single space', () => {
+    expect(toHexString(Uint8Array.of(0x4d, 0x5a, 0x90, 0x00))).toBe('4D 5A 90 00')
+  })
+
+  it('pads every byte to two digits', () => {
+    expect(toHexString(Uint8Array.of(0x00, 0x0a, 0x0f, 0xff))).toBe('00 0A 0F FF')
+  })
+
+  it('is empty for an empty run — no stray separator', () => {
+    expect(toHexString(new Uint8Array(0))).toBe('')
+  })
+
+  it('a single byte has no separator', () => {
+    expect(toHexString(Uint8Array.of(0x7f))).toBe('7F')
+  })
+
+  it('round-trips through a spaced-hex parser', () => {
+    const bytes = Uint8Array.from({ length: 32 }, (_u, i) => (i * 7 + 3) & 0xff)
+    const parsed = Uint8Array.from(toHexString(bytes).split(' '), (pair) => parseInt(pair, 16))
+    expect(parsed).toEqual(bytes)
   })
 })
 

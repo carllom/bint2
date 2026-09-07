@@ -37,6 +37,34 @@ export function toAsciiChar(byte: number): string {
 }
 
 /**
+ * A run of bytes as a copyable hex string (#25): one uppercase pair per byte,
+ * space-separated. The separator is deliberate — a spaced pair string is what
+ * `bytes.fromhex`, CyberChef's "From Hex", `xxd -r -p` and a hex editor's
+ * paste-as-hex all accept — and the Selection's copy goes to the clipboard in
+ * exactly this shape. Empty in, empty out.
+ *
+ * Built in fixed-size chunks rather than a per-byte `string[]`: the copy runs at
+ * up to the 8 MiB cap, and a whole-Selection intermediate array would be a
+ * transient spike far larger than the byte tool's whole memory budget.
+ */
+export function toHexString(bytes: Uint8Array): string {
+  if (bytes.length === 0) {
+    return ''
+  }
+  const chunks: string[] = []
+  let chunk = toHex(bytes[0]!)
+  for (let i = 1; i < bytes.length; i++) {
+    chunk += ' ' + toHex(bytes[i]!)
+    if (chunk.length >= 8192) {
+      chunks.push(chunk)
+      chunk = ''
+    }
+  }
+  chunks.push(chunk)
+  return chunks.join('')
+}
+
+/**
  * Binary digits, left-padded with `0` to at least `width` characters. Mirrors
  * {@link toHex}: `width` is a minimum and never a mask, so `toBinary(0x100)`
  * keeps its ninth digit. The status bar's `bin` field for the byte under the
