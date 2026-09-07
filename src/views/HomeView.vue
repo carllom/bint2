@@ -1,10 +1,12 @@
 <script setup lang="ts">
 // Phase-1 app shell. The toolbar carries the file-open control and the viewport
-// carries the hex grid; the dead-source banner and status bar are populated at
-// M5 (see docs/plan-phase1.md).
+// carries the hex grid; the status bar reads out where the Cursor is and what is
+// under it (#23), and the dead-source banner is populated later at M5 (see
+// docs/plan-phase1.md).
 import BytesPerRowControl from '@/components/BytesPerRowControl.vue'
 import FileDropZone from '@/components/FileDropZone.vue'
 import HexViewer from '@/components/HexViewer.vue'
+import StatusBar from '@/components/StatusBar.vue'
 </script>
 
 <template>
@@ -19,7 +21,10 @@ import HexViewer from '@/components/HexViewer.vue'
     <main class="app-shell__viewport" data-region="viewport">
       <HexViewer />
     </main>
-    <footer class="app-shell__status-bar" data-region="status-bar"></footer>
+    <!-- Packed and glanceable, never a live region (#23, ADR-0005). -->
+    <footer class="app-shell__status-bar" data-region="status-bar">
+      <StatusBar />
+    </footer>
   </div>
 </template>
 
