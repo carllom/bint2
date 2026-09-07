@@ -111,6 +111,15 @@ const sizeText = computed(
       <span data-field="selection-length">{{ selLength }} B</span>
     </span>
 
+    <span
+      v-if="documentStore.copyStatus !== null"
+      class="status-bar__group status-bar__copy"
+      :class="{ 'status-bar__copy--refused': !documentStore.copyStatus.ok }"
+      data-field="copy-status"
+    >
+      {{ documentStore.copyStatus.message }}
+    </span>
+
     <span class="status-bar__group status-bar__doc">
       <span data-field="file-name">{{ documentStore.fileName }}</span>
       <span class="status-bar__sep">·</span>
@@ -147,5 +156,15 @@ const sizeText = computed(
 .status-bar__label,
 .status-bar__sep {
   color: var(--color-fg-dim);
+}
+
+/* The last copy's outcome (#25). Plain text, not a live region — the spoken
+   counterpart is the separate action region (#28, ADR-0005). */
+.status-bar__copy {
+  color: var(--color-fg-dim);
+}
+
+.status-bar__copy--refused {
+  color: var(--color-cursor);
 }
 </style>

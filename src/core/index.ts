@@ -21,6 +21,7 @@ export {
   toBinary,
   toByteSize,
   toHex,
+  toHexString,
   toSignedByte,
 } from './format'
 export type { Selection, SelectionRange } from './selection'

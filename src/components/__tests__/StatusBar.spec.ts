@@ -193,6 +193,30 @@ describe('the status bar (#23)', () => {
     expect(field(app, 'byte-binary')).toBe('11111111')
   })
 
+  it('shows the last copy outcome, and marks a refusal, without being a live region (#25)', async () => {
+    const app = mountApp()
+    await openBytes(Array.from({ length: 64 }, (_u, i) => i))
+    const store = useDocumentStore(pinia)
+
+    // Nothing shown until a copy happens.
+    expect(field(app, 'copy-status')).toBeNull()
+
+    store.copyStatus = { ok: true, message: 'Copied 4 bytes to the clipboard as hex.' }
+    await flushPromises()
+    let shown = app.find('[data-field="copy-status"]')
+    expect(shown.text()).toBe('Copied 4 bytes to the clipboard as hex.')
+    expect(shown.classes()).not.toContain('status-bar__copy--refused')
+    // Still not a live region — the spoken form is #28's separate action region.
+    expect(shown.attributes('aria-live')).toBeUndefined()
+    expect(shown.attributes('role')).toBeUndefined()
+
+    store.copyStatus = { ok: false, message: 'Selection is 9.0 MiB … Nothing was copied.' }
+    await flushPromises()
+    shown = app.find('[data-field="copy-status"]')
+    expect(shown.text()).toContain('Nothing was copied.')
+    expect(shown.classes()).toContain('status-bar__copy--refused')
+  })
+
   it('is not a live region — the packed bar is never spoken as a whole (ADR-0005)', async () => {
     const app = mountApp()
     await openBytes([1, 2, 3, 4])
