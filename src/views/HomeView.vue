@@ -1,16 +1,22 @@
 <script setup lang="ts">
-// Phase-1 app shell. Empty regions only: the toolbar, dead-source banner,
-// Viewport and status bar are populated across M1–M5. Nothing here is
-// reader-visible yet — this milestone ships no feature (see docs/plan-phase1.md).
+// Phase-1 app shell. The toolbar carries the file-open control and the viewport
+// carries the hex grid; the dead-source banner and status bar are populated at
+// M5 (see docs/plan-phase1.md).
+import FileDropZone from '@/components/FileDropZone.vue'
+import HexViewer from '@/components/HexViewer.vue'
 </script>
 
 <template>
   <div class="app-shell">
-    <header class="app-shell__toolbar" data-region="toolbar"></header>
+    <header class="app-shell__toolbar" data-region="toolbar">
+      <FileDropZone />
+    </header>
     <!-- Populated only when the open document becomes a dead source (ADR-0004);
          zero-height otherwise, so it is not persistent chrome. -->
     <div class="app-shell__banner" data-region="banner"></div>
-    <main class="app-shell__viewport" data-region="viewport"></main>
+    <main class="app-shell__viewport" data-region="viewport">
+      <HexViewer />
+    </main>
     <footer class="app-shell__status-bar" data-region="status-bar"></footer>
   </div>
 </template>

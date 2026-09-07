@@ -8,8 +8,10 @@
 
   "compilerOptions": {
     // Vitest runs in a different environment than the application code.
-    // Adjust lib and types accordingly.
-    "lib": [],
+    // Adjust lib and types accordingly. The component/renderer specs mount real
+    // DOM under happy-dom and import `.vue` / DOM-touching modules, so the DOM
+    // lib is required here just as it is for the app project.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node", "happy-dom"],
 
     // `vue-tsc --build` produces a .tsbuildinfo file for incremental type-checking.
