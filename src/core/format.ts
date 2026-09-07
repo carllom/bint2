@@ -68,6 +68,22 @@ export function toHexString(bytes: Uint8Array): string {
 }
 
 /**
+ * A run of bytes decoded as text for a raw-text copy (#30). The counterpart to
+ * {@link toHexString}: hex is the byte-exact form, this is the convenience for
+ * when the Selection is an embedded string.
+ *
+ * The bytes are read as **UTF-8** — the encoding an embedded string almost
+ * always is, and the one that renders plain ASCII unchanged. Nothing is guessed
+ * and nothing is dropped: an undecodable byte becomes U+FFFD (`�`) rather than
+ * vanishing, and a leading BOM is kept (`ignoreBOM`), so the copied text is
+ * never silently shorter than, or a re-encoding of, the bytes that were marked.
+ * Empty in, empty out.
+ */
+export function toRawText(bytes: Uint8Array): string {
+  return new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes)
+}
+
+/**
  * Binary digits, left-padded with `0` to at least `width` characters. Mirrors
  * {@link toHex}: `width` is a minimum and never a mask, so `toBinary(0x100)`
  * keeps its ninth digit. The status bar's `bin` field for the byte under the

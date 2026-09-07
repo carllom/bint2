@@ -15,6 +15,9 @@
   --color-selection: #264f78;
   --color-selection-fg: #ffffff;
   --color-cursor: #6ea9ff;
+  /* The byte under the pointer (#30) — a quiet fill, clearly neither the
+     Selection nor the Cursor. */
+  --color-hover: #3a3d41;
 }
 
 @media (prefers-color-scheme: light) {
@@ -27,6 +30,7 @@
     --color-selection: #add6ff;
     --color-selection-fg: #1e1e1e;
     --color-cursor: #0067c0;
+    --color-hover: #e4e6eb;
   }
 }
 

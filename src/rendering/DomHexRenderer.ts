@@ -89,6 +89,7 @@ export class DomHexRenderer implements HexRowRenderer {
     const hexCells = fitCells(row.hex, 'hex-row__byte', columns)
     const asciiCells = fitCells(row.ascii, 'hex-row__char', columns)
     const sel = view.selection
+    const { hoveredByte } = view
 
     for (let column = 0; column < columns; column++) {
       const hexCell = hexCells[column]!
@@ -98,9 +99,9 @@ export class DomHexRenderer implements HexRowRenderer {
         asciiCell.textContent = PENDING_CHAR
         hexCell.removeAttribute('data-offset')
         asciiCell.removeAttribute('data-offset')
-        // A placeholder byte carries no offset — nothing to select or point at.
-        markCell(hexCell, 'hex-row__byte', false, false)
-        markCell(asciiCell, 'hex-row__char', false, false)
+        // A placeholder byte carries no offset — nothing to select, hover or point at.
+        markCell(hexCell, 'hex-row__byte', false, false, false)
+        markCell(asciiCell, 'hex-row__char', false, false, false)
       } else {
         const absOffset = data.offset + column
         const byte = bytes[column]!
@@ -114,17 +115,27 @@ export class DomHexRenderer implements HexRowRenderer {
         // range (`start === end`) is the Cursor, so nothing fills.
         const selected = sel !== null && absOffset >= sel.start && absOffset < sel.end
         const isCursor = sel !== null && absOffset === sel.cursor
-        markCell(hexCell, 'hex-row__byte', selected, isCursor)
-        markCell(asciiCell, 'hex-row__char', selected, isCursor)
+        // Same offset-driven path as the Selection; both panes marking the same
+        // byte is again a consequence, not a second computation (#30).
+        const isHovered = hoveredByte !== null && absOffset === hoveredByte
+        markCell(hexCell, 'hex-row__byte', selected, isCursor, isHovered)
+        markCell(asciiCell, 'hex-row__char', selected, isCursor, isHovered)
       }
     }
   }
 }
 
-/** Toggle the `--selected` / `--cursor` modifiers on a recycled cell. */
-function markCell(cell: HTMLElement, base: string, selected: boolean, cursor: boolean): void {
+/** Toggle the `--selected` / `--cursor` / `--hovered` modifiers on a recycled cell. */
+function markCell(
+  cell: HTMLElement,
+  base: string,
+  selected: boolean,
+  cursor: boolean,
+  hovered: boolean,
+): void {
   cell.classList.toggle(`${base}--selected`, selected)
   cell.classList.toggle(`${base}--cursor`, cursor)
+  cell.classList.toggle(`${base}--hovered`, hovered)
 }
 
 /** Grow or shrink `parent`'s `<span>` children to `count`, then return them. */
