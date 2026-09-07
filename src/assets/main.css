@@ -10,6 +10,11 @@
   --color-fg: #d4d4d4;
   --color-fg-dim: #808080;
   --color-border: #3a3a3a;
+
+  /* The one Selection and its collapsed form, the Cursor (ADR-0003). */
+  --color-selection: #264f78;
+  --color-selection-fg: #ffffff;
+  --color-cursor: #6ea9ff;
 }
 
 @media (prefers-color-scheme: light) {
@@ -18,6 +23,10 @@
     --color-fg: #1e1e1e;
     --color-fg-dim: #6a6a6a;
     --color-border: #d0d0d0;
+
+    --color-selection: #add6ff;
+    --color-selection-fg: #1e1e1e;
+    --color-cursor: #0067c0;
   }
 }
 

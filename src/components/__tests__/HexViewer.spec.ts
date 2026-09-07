@@ -555,3 +555,397 @@ describe('reshaping the grid with bytes-per-row presets (#19)', () => {
     expect(rowWidths(app).every((w) => w === 16)).toBe(true)
   })
 })
+
+// --- Cursor and Selection (#22, ADR-0003) -----------------------------------
+
+/**
+ * Lay every rendered byte out as a 10 px box so `byteAtPoint` resolves — happy-dom
+ * has no layout. Hex-pane byte `o` sits at x = `o*10 .. o*10+10`; the ASCII
+ * paint of the same byte sits 10000 px to the right. Reads `data-offset` live, so
+ * it survives the recycled pool being repainted.
+ */
+function stubCellBoxes(app: VueWrapper): void {
+  for (const cell of app.findAll('.hex-viewer__grid [data-offset]')) {
+    const el = cell.element as HTMLElement
+    Object.defineProperty(el, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => {
+        const offset = Number(el.dataset.offset)
+        const pane = el.classList.contains('hex-row__byte') ? 0 : 1
+        const left = pane * 10_000 + offset * 10
+        return {
+          left,
+          right: left + 10,
+          top: 0,
+          bottom: 10,
+          width: 10,
+          height: 10,
+          x: left,
+          y: 0,
+          toJSON() {},
+        }
+      },
+    })
+  }
+}
+
+/** Client x/y of the middle of hex-pane byte `offset`'s box. */
+function hexPoint(offset: number): { clientX: number; clientY: number } {
+  return { clientX: offset * 10 + 5, clientY: 5 }
+}
+
+/** Client x/y of the middle of the ASCII paint of byte `offset`. */
+function asciiPoint(offset: number): { clientX: number; clientY: number } {
+  return { clientX: 10_000 + offset * 10 + 5, clientY: 5 }
+}
+
+/** Absolute offsets of every `--selected` cell in the hex pane. */
+function selectedHexOffsets(app: VueWrapper): number[] {
+  return app
+    .findAll('.hex-row__byte--selected')
+    .map((c) => Number((c.element as HTMLElement).dataset.offset))
+}
+
+async function openFile(app: VueWrapper, bytes: number[]): Promise<void> {
+  useDocumentStore(pinia).open(new FileByteSource(fileOf(bytes)), 'sel.bin')
+  await flushPromises()
+  stubCellBoxes(app)
+}
+
+describe('the Cursor: one byte, pointed at or walked to (#22)', () => {
+  it('a plain click puts the Cursor on a byte, marked in both panes', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+
+    await app.find('.hex-viewer__row-area').trigger('pointerdown', { button: 0, ...hexPoint(3) })
+
+    expect(store.selection).toEqual({ anchor: 3, focus: 3 })
+    expect(app.findAll('.hex-row__byte--cursor')).toHaveLength(1)
+    expect(app.get('.hex-row__byte--cursor').attributes('data-offset')).toBe('3')
+    expect(app.get('.hex-row__char--cursor').attributes('data-offset')).toBe('3')
+    // A collapsed Selection fills nothing.
+    expect(app.findAll('.hex-row__byte--selected')).toHaveLength(0)
+  })
+
+  it('clicking the ASCII pane targets the same underlying byte', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+
+    await app.find('.hex-viewer__row-area').trigger('pointerdown', { button: 0, ...asciiPoint(5) })
+
+    expect(store.selection).toEqual({ anchor: 5, focus: 5 })
+    expect(app.get('.hex-row__byte--cursor').attributes('data-offset')).toBe('5')
+  })
+
+  it('ignores a press that lands on no rendered byte', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(app, [1, 2, 3, 4])
+
+    await app
+      .find('.hex-viewer__row-area')
+      .trigger('pointerdown', { button: 0, clientX: 5_000, clientY: 5_000 })
+
+    expect(store.selection).toBeNull()
+  })
+
+  it('the first cursor key reveals the Cursor on the first visible byte without skipping', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+    // Scroll so the top of the view is not offset 0.
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 5, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(80)
+    expect(store.selection).toBeNull()
+
+    await app.find('.hex-viewer__row-area').trigger('keydown', { key: 'ArrowRight' })
+    // Lands on the first visible byte, not one past it.
+    expect(store.selection).toEqual({ anchor: 80, focus: 80 })
+
+    await app.find('.hex-viewer__row-area').trigger('keydown', { key: 'ArrowRight' })
+    expect(store.selection).toEqual({ anchor: 81, focus: 81 })
+  })
+
+  it('arrow keys walk the Cursor by byte and by row', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    store.setCursor(20)
+    await area.trigger('keydown', { key: 'ArrowRight' })
+    expect(store.selection).toEqual({ anchor: 21, focus: 21 })
+    await area.trigger('keydown', { key: 'ArrowLeft' })
+    await area.trigger('keydown', { key: 'ArrowLeft' })
+    expect(store.selection).toEqual({ anchor: 19, focus: 19 })
+    await area.trigger('keydown', { key: 'ArrowDown' })
+    expect(store.selection).toEqual({ anchor: 35, focus: 35 }) // +bytesPerRow
+    await area.trigger('keydown', { key: 'ArrowUp' })
+    expect(store.selection).toEqual({ anchor: 19, focus: 19 })
+  })
+
+  it('Home / End walk to the row ends; Ctrl+Home / Ctrl+End to the document ends', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 100 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    store.setCursor(37) // row 2 (offsets 32..47) at 16 bpr
+    await area.trigger('keydown', { key: 'Home' })
+    expect(store.selection!.focus).toBe(32)
+    await area.trigger('keydown', { key: 'End' })
+    expect(store.selection!.focus).toBe(47)
+
+    await area.trigger('keydown', { key: 'End', ctrlKey: true })
+    expect(store.selection!.focus).toBe(99) // last byte
+    await area.trigger('keydown', { key: 'Home', ctrlKey: true })
+    expect(store.selection!.focus).toBe(0)
+  })
+
+  it('does nothing on a zero-byte file — there is no byte to point at', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(app, [])
+
+    await app.find('.hex-viewer__row-area').trigger('keydown', { key: 'ArrowRight' })
+    expect(store.selection).toBeNull()
+  })
+})
+
+describe('the Selection: one range, byte-snapped, linked across panes (#22)', () => {
+  it('drag selects a range, highlighted from the same bytes in both panes', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointerdown', { button: 0, pointerId: 1, ...hexPoint(2) })
+    await area.trigger('pointermove', { pointerId: 1, ...hexPoint(9) })
+    await area.trigger('pointerup', { pointerId: 1, ...hexPoint(9) })
+
+    expect(store.selection).toEqual({ anchor: 2, focus: 9 })
+    expect(selectedHexOffsets(app)).toEqual([2, 3, 4, 5, 6, 7, 8, 9])
+    // The ASCII pane highlights exactly the same bytes.
+    expect(
+      app
+        .findAll('.hex-row__char--selected')
+        .map((c) => Number((c.element as HTMLElement).dataset.offset)),
+    ).toEqual([2, 3, 4, 5, 6, 7, 8, 9])
+  })
+
+  it('shift-click extends the current Selection to the clicked byte, backwards if that is the end grabbed', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointerdown', { button: 0, ...hexPoint(10) })
+    await area.trigger('pointerdown', { button: 0, shiftKey: true, ...hexPoint(4) })
+
+    expect(store.selection).toEqual({ anchor: 10, focus: 4 })
+    expect(selectedHexOffsets(app)).toEqual([4, 5, 6, 7, 8, 9, 10])
+  })
+
+  it('keeps extending when a shift-click turns into a drag', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointerdown', { button: 0, ...hexPoint(10) })
+    await area.trigger('pointerdown', { button: 0, pointerId: 1, shiftKey: true, ...hexPoint(4) })
+    await area.trigger('pointermove', { pointerId: 1, ...hexPoint(2) })
+    await area.trigger('pointerup', { pointerId: 1, ...hexPoint(2) })
+
+    expect(store.selection).toEqual({ anchor: 10, focus: 2 })
+    expect(selectedHexOffsets(app)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10])
+  })
+
+  it('Shift+arrows extend the end the reader grabbed — a backwards Selection extends backwards', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    store.setCursor(20)
+    await area.trigger('keydown', { key: 'ArrowLeft', shiftKey: true })
+    expect(store.selection).toEqual({ anchor: 20, focus: 19 })
+    await area.trigger('keydown', { key: 'ArrowLeft', shiftKey: true })
+    expect(store.selection).toEqual({ anchor: 20, focus: 18 })
+    // Now flip forwards past the anchor in one extend.
+    await area.trigger('keydown', { key: 'ArrowDown', shiftKey: true })
+    expect(store.selection).toEqual({ anchor: 20, focus: 34 })
+  })
+
+  it('Shift+arrow after the Cursor first appears extends from where it was, not the destination', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+    const area = app.find('.hex-viewer__row-area')
+
+    expect(store.selection).toBeNull()
+    // First key press only reveals the Cursor on the first visible byte.
+    await area.trigger('keydown', { key: 'ArrowRight', shiftKey: true })
+    expect(store.selection).toEqual({ anchor: 0, focus: 0 })
+
+    // The next Shift+arrow extends from that anchor, one byte at a time.
+    await area.trigger('keydown', { key: 'ArrowRight', shiftKey: true })
+    expect(store.selection).toEqual({ anchor: 0, focus: 1 })
+  })
+
+  it('a plain click replaces the Selection — there is never more than one range', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('pointerdown', { button: 0, pointerId: 1, ...hexPoint(2) })
+    await area.trigger('pointermove', { pointerId: 1, ...hexPoint(9) })
+    await area.trigger('pointerup', { pointerId: 1, ...hexPoint(9) })
+    expect(selectedHexOffsets(app)).toHaveLength(8)
+
+    await area.trigger('pointerdown', { button: 0, ...hexPoint(15) })
+    expect(store.selection).toEqual({ anchor: 15, focus: 15 })
+    expect(app.findAll('.hex-row__byte--selected')).toHaveLength(0)
+    expect(app.findAll('.hex-row__byte--cursor')).toHaveLength(1)
+  })
+
+  it('does not survive opening another document', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(
+      app,
+      Array.from({ length: 48 }, (_u, i) => i),
+    )
+
+    await app.find('.hex-viewer__row-area').trigger('pointerdown', { button: 0, ...hexPoint(4) })
+    expect(store.selection).not.toBeNull()
+
+    store.open(new FileByteSource(fileOf([9, 9, 9, 9])), 'other.bin')
+    await flushPromises()
+
+    expect(store.selection).toBeNull()
+    expect(app.findAll('.hex-row__byte--cursor')).toHaveLength(0)
+    expect(app.findAll('.hex-row__byte--selected')).toHaveLength(0)
+  })
+})
+
+describe('keyboard drives the Cursor, pointer drives the view (#22, ADR-0003)', () => {
+  it('the view follows the Cursor down one row at a time, and no further', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+    const area = app.find('.hex-viewer__row-area')
+
+    // 40 whole rows visible (rows 0..39). Put the Cursor on the last visible row.
+    store.setCursor(39 * 16)
+    expect(store.topByteOffset).toBe(0)
+
+    await area.trigger('keydown', { key: 'ArrowDown' })
+    // Cursor is now on row 40 — one past the bottom, so the view scrolls exactly
+    // one row to reveal it and no further.
+    expect(store.selection!.focus).toBe(40 * 16)
+    expect(store.topByteOffset).toBe(16)
+
+    await area.trigger('keydown', { key: 'ArrowDown' })
+    expect(store.selection!.focus).toBe(41 * 16)
+    expect(store.topByteOffset).toBe(32) // one more row, still minimal
+
+    // Walking the Cursor back up while its row stays on screen moves nothing.
+    await area.trigger('keydown', { key: 'ArrowUp' })
+    expect(store.topByteOffset).toBe(32)
+  })
+
+  it('pulls the view back up when the Cursor would leave the top', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+    const area = app.find('.hex-viewer__row-area')
+
+    store.setCursor(10 * 16)
+    store.topByteOffset = 10 * 16 // firstRow 10 — the Cursor sits on the top row
+    await area.trigger('keydown', { key: 'ArrowUp' })
+
+    expect(store.selection!.focus).toBe(9 * 16)
+    expect(store.topByteOffset).toBe(9 * 16) // scrolled up exactly one row
+  })
+
+  it('Ctrl+End / Ctrl+Home move the Cursor to the document ends and the view with them', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    const source = new SyntheticByteSource()
+    await openSynthetic(app, source)
+    const area = app.find('.hex-viewer__row-area')
+
+    store.setCursor(0)
+    await area.trigger('keydown', { key: 'End', ctrlKey: true })
+    expect(store.selection!.focus).toBe(source.size - 1)
+    expect(store.topByteOffset).toBe(LAST_TOP_OFFSET)
+
+    await area.trigger('keydown', { key: 'Home', ctrlKey: true })
+    expect(store.selection!.focus).toBe(0)
+    expect(store.topByteOffset).toBe(0)
+  })
+
+  it('PageDown / PageUp move the Cursor by a screenful', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+    const area = app.find('.hex-viewer__row-area')
+
+    store.setCursor(0)
+    await area.trigger('keydown', { key: 'PageDown' })
+    expect(store.selection!.focus).toBe(40 * 16) // visibleRows * bytesPerRow
+    await area.trigger('keydown', { key: 'PageUp' })
+    expect(store.selection!.focus).toBe(0)
+  })
+
+  it('the wheel moves the view only and may leave the Cursor off screen', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    // A file with rows below the fold, so a Cursor at offset 0 can scroll away.
+    await openFile(
+      app,
+      Array.from({ length: 2048 }, (_u, i) => i & 0xff),
+    )
+
+    store.setCursor(0)
+    await flushPromises()
+    expect(app.findAll('.hex-row__byte--cursor')).toHaveLength(1)
+
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 100, deltaMode: 1 })
+
+    expect(store.selection).toEqual({ anchor: 0, focus: 0 }) // untouched by the wheel
+    expect(store.topByteOffset).toBeGreaterThan(0)
+    expect(app.findAll('.hex-row__byte--cursor')).toHaveLength(0) // scrolled past
+  })
+})

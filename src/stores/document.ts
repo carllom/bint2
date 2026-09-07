@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import { clampTopOffset } from '@/core'
-import type { ByteSource, ViewportMetrics } from '@/core'
+import { clampTopOffset, cursorAt, extendTo } from '@/core'
+import type { ByteSource, Selection, ViewportMetrics } from '@/core'
 
 /**
  * The bytes-per-row presets the reader can reshape the grid to (#19, ADR-0006).
@@ -33,12 +33,52 @@ export const useDocumentStore = defineStore('document', () => {
   // grid reshapes (#19).
   const bytesPerRow = ref<BytesPerRow>(16)
 
+  // The one marked range (CONTEXT.md, ADR-0003). `null` until the reader first
+  // points at a byte; `anchor === focus` is the Cursor. Held as byte offsets, so
+  // both panes paint from it and no sub-byte position is representable. It does
+  // not survive the document being closed.
+  const selection = shallowRef<Selection | null>(null)
+
   function open(next: ByteSource, name: string): void {
     source.value?.close()
     source.value = next
     fileName.value = name
     fileSize.value = next.size
     topByteOffset.value = 0
+    selection.value = null
+  }
+
+  /** Snap an arbitrary offset onto a real byte `[0, size - 1]`. */
+  function clampByte(offset: number): number {
+    if (!Number.isFinite(offset)) {
+      return 0
+    }
+    return Math.min(Math.max(Math.trunc(offset), 0), fileSize.value - 1)
+  }
+
+  /**
+   * Put the Cursor on `offset` — a plain click or an unshifted arrow. The
+   * Selection collapses to a single position and any previous range is gone;
+   * there is never more than one range.
+   */
+  function setCursor(offset: number): void {
+    if (source.value === null || fileSize.value === 0) {
+      return
+    }
+    selection.value = cursorAt(clampByte(offset))
+  }
+
+  /**
+   * Extend the Selection's focus to `offset` — drag, Shift+click, Shift+arrows.
+   * The anchor stays put, so a backwards Selection extends backwards. With no
+   * Selection yet, this anchors where it lands.
+   */
+  function extendSelectionTo(offset: number): void {
+    if (source.value === null || fileSize.value === 0) {
+      return
+    }
+    const to = clampByte(offset)
+    selection.value = selection.value === null ? cursorAt(to) : extendTo(selection.value, to)
   }
 
   /**
@@ -71,8 +111,11 @@ export const useDocumentStore = defineStore('document', () => {
     fileSize,
     topByteOffset,
     bytesPerRow,
+    selection,
     open,
     scrollTo,
     setBytesPerRow,
+    setCursor,
+    extendSelectionTo,
   }
 })

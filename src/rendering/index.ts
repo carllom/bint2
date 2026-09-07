@@ -2,5 +2,5 @@
 // outside the framework-free core; a CanvasHexRenderer could slot in behind the
 // same interface without touching the data layer.
 
-export type { HexGridView, HexRowRenderer, HexRowView } from './HexRowRenderer'
+export type { HexGridView, HexRowRenderer, HexRowView, SelectionView } from './HexRowRenderer'
 export { DomHexRenderer } from './DomHexRenderer'

@@ -88,6 +88,7 @@ export class DomHexRenderer implements HexRowRenderer {
     const columns = pending ? view.bytesPerRow : bytes.length
     const hexCells = fitCells(row.hex, 'hex-row__byte', columns)
     const asciiCells = fitCells(row.ascii, 'hex-row__char', columns)
+    const sel = view.selection
 
     for (let column = 0; column < columns; column++) {
       const hexCell = hexCells[column]!
@@ -97,16 +98,33 @@ export class DomHexRenderer implements HexRowRenderer {
         asciiCell.textContent = PENDING_CHAR
         hexCell.removeAttribute('data-offset')
         asciiCell.removeAttribute('data-offset')
+        // A placeholder byte carries no offset — nothing to select or point at.
+        markCell(hexCell, 'hex-row__byte', false, false)
+        markCell(asciiCell, 'hex-row__char', false, false)
       } else {
+        const absOffset = data.offset + column
         const byte = bytes[column]!
         hexCell.textContent = toHex(byte, 2)
         asciiCell.textContent = toAsciiChar(byte)
-        const offset = String(data.offset + column)
+        const offset = String(absOffset)
         hexCell.dataset.offset = offset
         asciiCell.dataset.offset = offset
+        // Both panes paint from the same byte range, never from pixel geometry —
+        // the linked hex↔ASCII highlight is a consequence (ADR-0003). An empty
+        // range (`start === end`) is the Cursor, so nothing fills.
+        const selected = sel !== null && absOffset >= sel.start && absOffset < sel.end
+        const isCursor = sel !== null && absOffset === sel.cursor
+        markCell(hexCell, 'hex-row__byte', selected, isCursor)
+        markCell(asciiCell, 'hex-row__char', selected, isCursor)
       }
     }
   }
+}
+
+/** Toggle the `--selected` / `--cursor` modifiers on a recycled cell. */
+function markCell(cell: HTMLElement, base: string, selected: boolean, cursor: boolean): void {
+  cell.classList.toggle(`${base}--selected`, selected)
+  cell.classList.toggle(`${base}--cursor`, cursor)
 }
 
 /** Grow or shrink `parent`'s `<span>` children to `count`, then return them. */
