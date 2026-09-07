@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef, watch } from 'vue'
-import { clampTopOffset, cursorAt, extendTo, rangeOf, toByteSize, toHexString } from '@/core'
+import {
+  clampTopOffset,
+  cursorAt,
+  extendTo,
+  rangeOf,
+  toByteSize,
+  toByteSizeDetail,
+  toHexString,
+} from '@/core'
 import type { ByteSource, Selection, ViewportMetrics } from '@/core'
 
 /**
@@ -217,7 +225,7 @@ export const useDocumentStore = defineStore('document', () => {
       copyStatus.value = {
         ok: false,
         message:
-          `Selection is ${toByteSize(bytes)} (${bytes.toLocaleString()} bytes) — ` +
+          `Selection is ${toByteSizeDetail(bytes)} — ` +
           `over the ${toByteSize(COPY_BYTE_CAP)} copy limit. Nothing was copied.`,
       }
       return

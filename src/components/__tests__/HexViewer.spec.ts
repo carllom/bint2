@@ -1507,3 +1507,237 @@ describe('the dead-source banner (#26, ADR-0004)', () => {
     expect(banner(app).exists()).toBe(false)
   })
 })
+
+// --- Viewport accessibility: role=application and the announced Cursor (#27, ADR-0005) --
+
+function liveRegion(app: VueWrapper) {
+  return app.find('[data-field="cursor-live-region"]')
+}
+
+describe('Viewport accessibility: role=application and the announced Cursor (#27)', () => {
+  it('the Viewport is a single role=application element with a usage note and a label naming the file', async () => {
+    const app = mountApp()
+    const area = app.find('.hex-viewer__row-area')
+
+    expect(area.attributes('tabindex')).toBe('0')
+    expect(area.attributes('role')).toBe('application')
+    expect(area.attributes('aria-describedby')).toBe('hex-viewer-usage')
+    const usage = app.find('#hex-viewer-usage')
+    expect(usage.exists()).toBe(true)
+    expect(usage.text()).toMatch(/arrow/i)
+    expect(usage.text()).toMatch(/ctrl\+g/i)
+    expect(usage.text()).toMatch(/tab/i)
+    expect(area.attributes('aria-label')).toBe('Hex viewer') // no file open yet
+
+    await openFile(app, [1, 2, 3, 4])
+
+    const label = app.find('.hex-viewer__row-area').attributes('aria-label')!
+    expect(label).toContain('sel.bin') // openFile's fixed name
+    expect(label).toContain('4 bytes')
+  })
+
+  it('never scopes role=application past the Viewport', () => {
+    const app = mountApp()
+    expect(app.find('[data-region="viewport"]').attributes('role')).toBeUndefined()
+    expect(app.find('.app-shell').attributes('role')).toBeUndefined()
+  })
+
+  it('rows are aria-hidden and never focusable — reading the grid as a document is a non-goal', async () => {
+    const app = mountApp()
+    await openFile(app, [1, 2, 3, 4])
+
+    const row = app.get('.hex-row')
+    expect(row.attributes('aria-hidden')).toBe('true')
+    expect(row.attributes('tabindex')).toBeUndefined()
+    for (const cell of app.findAll('.hex-row__byte').concat(app.findAll('.hex-row__char'))) {
+      expect(cell.attributes('tabindex')).toBeUndefined()
+    }
+  })
+
+  it('moves focus to the Viewport on a successful open, with the label already naming the new file', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+
+    store.open(new FileByteSource(fileOf([1, 2, 3], 'opened.bin')), 'opened.bin')
+    await flushPromises()
+
+    const area = app.find('.hex-viewer__row-area')
+    expect(document.activeElement).toBe(area.element)
+    expect(area.attributes('aria-label')).toContain('opened.bin')
+    expect(area.attributes('aria-label')).toContain('3 bytes')
+  })
+
+  it('announces the Cursor as one sentence, debounced so it speaks the destination, not the journey', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    store.open(new FileByteSource(fileOf([0x4d, 0x5a, 0x90, 0x00])), 'sel.bin')
+    await flushPromises()
+    expect(liveRegion(app).exists()).toBe(true) // present (and empty) before any Cursor move
+
+    vi.useFakeTimers()
+    try {
+      store.setCursor(0)
+      await app.vm.$nextTick()
+      expect(liveRegion(app).text()).toBe('') // still settling
+
+      await vi.advanceTimersByTimeAsync(200)
+      expect(liveRegion(app).text()).toBe("offset 0x00, byte 4D, 'M'")
+
+      // A second, uninterrupted move re-settles and speaks its own destination.
+      store.setCursor(1)
+      await app.vm.$nextTick()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(liveRegion(app).text()).toBe("offset 0x01, byte 5A, 'Z'")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a held key only speaks where it settles — interrupted moves never get their own announcement', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    store.open(new FileByteSource(fileOf(Array.from({ length: 8 }, (_u, i) => i))), 'walk.bin')
+    await flushPromises()
+
+    vi.useFakeTimers()
+    try {
+      store.setCursor(0)
+      await app.vm.$nextTick()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(liveRegion(app).text()).toBe("offset 0x00, byte 00, '.'")
+
+      store.setCursor(1)
+      await app.vm.$nextTick()
+      await vi.advanceTimersByTimeAsync(100) // under the 200ms settle
+      store.setCursor(2)
+      await app.vm.$nextTick()
+      await vi.advanceTimersByTimeAsync(100)
+      store.setCursor(3)
+      await app.vm.$nextTick()
+      // None of 1, 2 or 3 ever sat still for 200ms — nothing new spoken yet.
+      expect(liveRegion(app).text()).toBe("offset 0x00, byte 00, '.'")
+
+      await vi.advanceTimersByTimeAsync(200)
+      expect(liveRegion(app).text()).toBe("offset 0x03, byte 03, '.'")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('speaks an extended Selection as a range and its length — one concept, not a second beside the Cursor', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    store.open(new FileByteSource(fileOf(Array.from({ length: 32 }, (_u, i) => i))), 'range.bin')
+    await flushPromises()
+
+    vi.useFakeTimers()
+    try {
+      store.setCursor(0x10)
+      store.extendSelectionTo(0x1f)
+      await app.vm.$nextTick()
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(liveRegion(app).text()).toBe('selection 0x10 to 0x1F, 16 bytes')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('updates the announcement once a still-settling byte resolves after the debounce fires', async () => {
+    let resolveRead: (() => void) | null = null
+    const source: ByteSource = {
+      size: 64,
+      read: (_offset, length) =>
+        new Promise((resolve) => {
+          resolveRead = () => resolve(new Uint8Array(length).fill(0x4d))
+        }),
+      readSync: () => null,
+      prefetch: () => {},
+      close: () => {},
+    }
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    store.open(source, 'deferred.bin')
+    await flushPromises()
+
+    vi.useFakeTimers()
+    try {
+      store.setCursor(10)
+      await app.vm.$nextTick()
+      await vi.advanceTimersByTimeAsync(200) // the debounce settles...
+      expect(liveRegion(app).text()).toBe('') // ...but the byte is still in flight, so withheld
+
+      resolveRead!()
+      await vi.advanceTimersByTimeAsync(0)
+      await app.vm.$nextTick()
+
+      expect(liveRegion(app).text()).toBe("offset 0x0A, byte 4D, 'M'")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('is keyed off the Cursor, not the view — wheel and thumb-drag scrolling announce nothing', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 500, deltaMode: 1 })
+    await flushPromises()
+
+    expect(liveRegion(app).text()).toBe('')
+  })
+
+  it('Ctrl+G speaks its destination through this same region — Goto sets the Cursor', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    vi.useFakeTimers()
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', ctrlKey: true, bubbles: true }))
+      await app.vm.$nextTick()
+      await app.find('#goto-box-input').setValue('0x1F40')
+      await app.find('.goto-box__form').trigger('submit')
+      await app.vm.$nextTick()
+
+      expect(store.selection).toEqual({ anchor: 8000, focus: 8000 })
+      await vi.advanceTimersByTimeAsync(200)
+      await app.vm.$nextTick() // the byte at 8000 resolves through the async `read` path
+
+      // SyntheticByteSource: byte i holds (offset + i) & 0xff; 8000 & 0xff === 0x40.
+      expect(liveRegion(app).text()).toBe("offset 0x1F40, byte 40, '@'")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('closes an open Goto box on a new document rather than fighting its focus trap', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', ctrlKey: true, bubbles: true }))
+    await flushPromises()
+    expect(app.find('.goto-box').exists()).toBe(true)
+
+    // A new document opens while the box is still up (e.g. a drop reaching the
+    // toolbar, outside the box's own backdrop) — the box must not out-fight the
+    // Viewport's own focus-on-open (ADR-0005) via its focusout backstop.
+    useDocumentStore(pinia).open(new FileByteSource(fileOf([1, 2, 3])), 'second.bin')
+    await flushPromises()
+
+    expect(app.find('.goto-box').exists()).toBe(false)
+    expect(document.activeElement).toBe(app.find('.hex-viewer__row-area').element)
+  })
+
+  it('Tab leaves the Viewport — the reader is never trapped in the grid', async () => {
+    // No keydown interception for Tab: CURSOR_KEYS omits it, and it is not the
+    // copy chord, so the browser's native focus-advance is left alone.
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    app.find('.hex-viewer__row-area').element.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+  })
+})

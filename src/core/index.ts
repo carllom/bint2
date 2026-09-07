@@ -15,11 +15,13 @@ export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export {
   addressWidthFor,
+  describeSelection,
   parseOffset,
   toAddress,
   toAsciiChar,
   toBinary,
   toByteSize,
+  toByteSizeDetail,
   toHex,
   toHexString,
   toSignedByte,

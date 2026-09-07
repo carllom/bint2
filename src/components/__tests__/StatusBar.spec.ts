@@ -49,7 +49,10 @@ describe('the status bar (#23)', () => {
   it('shows nothing until a document is open', () => {
     const app = mountApp()
     expect(app.find('.status-bar').exists()).toBe(false)
-    expect(app.findAll('[data-field]')).toHaveLength(0)
+    // No `[data-field]` anywhere but the Viewport's own cursor live region
+    // (#27) — present, empty, and unconditional, unlike every status-bar field.
+    const fields = app.findAll('[data-field]').map((el) => el.attributes('data-field'))
+    expect(fields).toEqual(['cursor-live-region'])
   })
 
   it('always shows the file name and total size while a document is open', async () => {

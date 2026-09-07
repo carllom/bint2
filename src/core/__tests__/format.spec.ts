@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addressWidthFor,
+  describeSelection,
   parseOffset,
   toAddress,
   toAsciiChar,
@@ -10,6 +11,7 @@ import {
   toHexString,
   toSignedByte,
 } from '../format'
+import { cursorAt, extendTo } from '../selection'
 
 describe('toHex', () => {
   it.each([
@@ -167,6 +169,38 @@ describe('parseOffset', () => {
     ['nonsense'],
   ])('parseOffset(%j) === null', (text) => {
     expect(parseOffset(text)).toBeNull()
+  })
+})
+
+describe('describeSelection', () => {
+  it('speaks the offset and the byte there when the Selection is collapsed (the Cursor)', () => {
+    expect(describeSelection(cursorAt(0x1f40), 0x4d)).toBe("offset 0x1F40, byte 4D, 'M'")
+  })
+
+  it('renders a non-printable byte with the same "." the ASCII pane shows', () => {
+    expect(describeSelection(cursorAt(0), 0x00)).toBe("offset 0x00, byte 00, '.'")
+  })
+
+  it('withholds the sentence while the point read for a collapsed Selection is in flight', () => {
+    expect(describeSelection(cursorAt(0x1f40), null)).toBeNull()
+  })
+
+  it('speaks the range and its length — inclusive on the second address — when extended', () => {
+    expect(describeSelection(extendTo(cursorAt(0x1f40), 0x1f4f), null)).toBe(
+      'selection 0x1F40 to 0x1F4F, 16 bytes',
+    )
+  })
+
+  it('a backwards extended Selection still speaks the range low-to-high', () => {
+    expect(describeSelection(extendTo(cursorAt(0x10), 0x0), null)).toBe(
+      'selection 0x00 to 0x10, 17 bytes',
+    )
+  })
+
+  it('ignores the byte argument for an extended Selection — there is nothing extra to invent', () => {
+    expect(describeSelection(extendTo(cursorAt(0), 5), 0xff)).toBe(
+      'selection 0x00 to 0x05, 6 bytes',
+    )
   })
 })
 

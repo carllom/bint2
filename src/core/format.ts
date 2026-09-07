@@ -3,6 +3,9 @@
  * state, no DOM — table-tested in `__tests__/format.spec.ts`.
  */
 
+import type { Selection } from './selection'
+import { isCollapsed, rangeOf } from './selection'
+
 /**
  * Uppercase hex, left-padded with `0` to at least `width` characters.
  *
@@ -120,4 +123,36 @@ export function toByteSize(bytes: number): string {
     unit += 1
   }
   return `${value.toFixed(1)} ${units[unit]}`
+}
+
+/**
+ * `toByteSize` plus the exact count beside it, "1.9 GiB (2,000,000,000
+ * bytes)" — the shared form the status bar's document identity, the
+ * Viewport's `aria-label` (#27), and the copy-cap refusal message (#25) all
+ * show, so a wording change is made once rather than in three call sites.
+ */
+export function toByteSizeDetail(bytes: number): string {
+  return `${toByteSize(bytes)} (${bytes.toLocaleString()} bytes)`
+}
+
+/**
+ * The Viewport's cursor live region (#27, ADR-0005): the one sentence spoken
+ * for the Selection, chosen by whether it is collapsed — there is one concept
+ * here (ADR-0003), so this never invents a second. Collapsed →
+ * `"offset 0x1F40, byte 4D, 'M'"`; extended → `"selection 0x1F40 to 0x1F4F, 16
+ * bytes"` (the second address is the last byte in the range, not the half-open
+ * end). `byte` is the value at the Cursor, or `null` while its point read is
+ * still in flight — the announcement is withheld rather than speaking a
+ * placeholder, since a stale ".." read out loud is worse than a beat of
+ * silence.
+ */
+export function describeSelection(selection: Selection, byte: number | null): string | null {
+  if (isCollapsed(selection)) {
+    if (byte === null) {
+      return null
+    }
+    return `offset 0x${toHex(selection.focus)}, byte ${toHex(byte)}, '${toAsciiChar(byte)}'`
+  }
+  const { start, end } = rangeOf(selection)
+  return `selection 0x${toHex(start)} to 0x${toHex(end - 1)}, ${end - start} bytes`
 }

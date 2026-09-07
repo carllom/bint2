@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { parseOffset } from '@/core'
 import type { ViewportMetrics } from '@/core'
 import { useDocumentStore } from '@/stores/document'
@@ -27,6 +27,17 @@ const text = ref('')
 const invalid = ref(false)
 const inputEl = useTemplateRef<HTMLInputElement>('input')
 const dialogEl = useTemplateRef<HTMLElement>('dialog')
+
+// A newly opened document supersedes any Goto in progress — closed rather than
+// left to fight the Viewport's own focus-on-open (#27, ADR-0005). Not routed
+// through `cancel()`: that emits `close` to hand focus back, and the Viewport
+// is already claiming it on this same source change.
+watch(
+  () => documentStore.source,
+  () => {
+    open.value = false
+  },
+)
 
 /**
  * `Ctrl+G` / `Cmd+G` opens the box regardless of where focus sits. `Shift` and
