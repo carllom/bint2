@@ -144,8 +144,22 @@ describe('the app shell, mounted whole', () => {
     expect(rows[0]!.get('.hex-row__addr').text()).toBe('00000000')
     expect(rows[1]!.get('.hex-row__addr').text()).toBe('00000010')
     expect(rows[0]!.findAll('.hex-row__byte').map((c) => c.text())).toEqual([
-      '00', '01', '02', '03', '04', '05', '06', '07',
-      '08', '09', '0A', '0B', '0C', '0D', '0E', '0F',
+      '00',
+      '01',
+      '02',
+      '03',
+      '04',
+      '05',
+      '06',
+      '07',
+      '08',
+      '09',
+      '0A',
+      '0B',
+      '0C',
+      '0D',
+      '0E',
+      '0F',
     ])
     // Bytes 0x00–0x0F are all control characters.
     expect(rows[0]!.get('.hex-row__ascii').element.textContent).toBe('.'.repeat(16))
@@ -219,7 +233,14 @@ describe('the app shell, mounted whole', () => {
     const rows = app.findAll('.hex-row')
     expect(rows).toHaveLength(3) // ceil(40 / 16)
     expect(rows[2]!.findAll('.hex-row__byte').map((c) => c.text())).toEqual([
-      '20', '21', '22', '23', '24', '25', '26', '27',
+      '20',
+      '21',
+      '22',
+      '23',
+      '24',
+      '25',
+      '26',
+      '27',
     ])
   })
 
@@ -285,7 +306,15 @@ function visibleRows(app: VueWrapper): number {
 function stubHeight(app: VueWrapper, selector: string, height: number): void {
   Object.defineProperty(app.find(selector).element, 'getBoundingClientRect', {
     value: () => ({
-      height, width: 0, top: 0, left: 0, right: 0, bottom: height, x: 0, y: 0, toJSON() {},
+      height,
+      width: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: height,
+      x: 0,
+      y: 0,
+      toJSON() {},
     }),
     configurable: true,
   })
@@ -408,5 +437,86 @@ describe('scrolling the whole document', () => {
 
     expect(store.topByteOffset).toBe((125_000_000 - 80) * 16)
     expect(visibleRows(app)).toBe(80)
+  })
+})
+
+describe('reshaping the grid with bytes-per-row presets (#19)', () => {
+  /** Byte-cell counts of every rendered (non-hidden) row. */
+  function rowWidths(app: VueWrapper): number[] {
+    return app
+      .findAll('.hex-row')
+      .filter((row) => !(row.element as HTMLElement).hidden)
+      .map((row) => row.findAll('.hex-row__byte').length)
+  }
+
+  async function choosePreset(app: VueWrapper, preset: number): Promise<void> {
+    await app.find(`input[name="bytes-per-row"][value="${preset}"]`).trigger('change')
+    await flushPromises()
+  }
+
+  it('preserves the byte offset — aligned down, not the row index — on a change', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    // Row 5 at 16 bpr — byte offset 80.
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 5, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(80)
+
+    await choosePreset(app, 24)
+
+    // 80 aligned down to a 24-byte row boundary is 72 — the byte, kept as
+    // closely as a row allows; the row index (was 5, now 3) is not.
+    expect(store.topByteOffset).toBe(72)
+    expect(app.get('.hex-row__addr').text()).toBe(toAddress(72, 8))
+  })
+
+  it('repaints the grid and the ASCII pane with the new column count', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+
+    expect(rowWidths(app).every((w) => w === 16)).toBe(true)
+    expect(app.findAll('.hex-row').at(0)!.findAll('.hex-row__char')).toHaveLength(16)
+
+    await choosePreset(app, 32)
+    expect(rowWidths(app).every((w) => w === 32)).toBe(true)
+    expect(app.findAll('.hex-row').at(0)!.findAll('.hex-row__char')).toHaveLength(32)
+
+    await choosePreset(app, 8)
+    expect(rowWidths(app).every((w) => w === 8)).toBe(true)
+    expect(app.findAll('.hex-row').at(0)!.findAll('.hex-row__char')).toHaveLength(8)
+  })
+
+  it('ratchets the offset down by at most bytesPerRow - 1 each change, not a lossless round-trip', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    await app.find('.hex-viewer__row-area').trigger('wheel', { deltaY: 5, deltaMode: 1 })
+    expect(store.topByteOffset).toBe(80)
+
+    await choosePreset(app, 24)
+    expect(store.topByteOffset).toBe(72) // lost 8, within 24 - 1
+
+    await choosePreset(app, 16)
+    expect(store.topByteOffset).toBe(64) // lost 8, within 16 - 1
+
+    // 16 -> 24 -> 16 landed at 64, not back at 80. The ratchet is pinned, not
+    // asserted away (ADR-0006).
+    expect(store.topByteOffset).toBeLessThan(80)
+  })
+
+  it('is the only lever — the grid does not reshape when the row area resizes', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openSynthetic(app, new SyntheticByteSource())
+
+    stubHeight(app, '.hex-viewer__probe', 9)
+    stubHeight(app, '.hex-viewer__row-area', 400)
+    window.dispatchEvent(new Event('resize'))
+    await flushPromises()
+
+    expect(store.bytesPerRow).toBe(16)
+    expect(rowWidths(app).every((w) => w === 16)).toBe(true)
   })
 })
