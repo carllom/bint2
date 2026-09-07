@@ -53,8 +53,9 @@ What is committed and in place, and how it was checked:
 
 - **Keyboard operability** — every action (open, navigate, Goto, select, copy,
   reshape) is reachable and driveable from the keyboard with no pointer. The
-  keydown handling for each is covered by the unit suite; the keyboard-only
-  end-to-end journey is scheduled hardening (see below).
+  keydown handling for each is covered by the unit suite, and a keyboard-only
+  end-to-end journey (open → Goto → arrows → shift-select → copy, never touching
+  the pointer) runs in the Playwright suite.
 - **Honest labelling** — the file button, the bytes-per-row presets, and the
   Goto box are ordinary labelled controls; the directory-refusal message is an
   alert; the dead-source banner announces in place without stealing focus. No
@@ -68,9 +69,11 @@ What is committed and in place, and how it was checked:
 - **Zoom, OS font scaling, reduced motion, and contrast** are supported — row
   height is measured from a rendered glyph and re-measured on zoom.
 
-A manual NVDA (Windows) and VoiceOver (macOS) pass and an automated
-keyboard-only journey are scheduled hardening and have not been run yet; this
-section states what is verified today, not a finished audit.
+A manual NVDA (Windows) and VoiceOver (macOS) pass is the remaining hardening
+step and has not been run yet — its two journeys (open a file and hear its name
+and size; walk the Cursor and hear the offset and byte) and a results template
+are in [`docs/manual-passes.md`](./docs/manual-passes.md). This section states
+what is verified today, not a finished audit.
 
 **WCAG 1.4.10 (reflow) at 400% is not met for the grid.** Bytes per row is a
 fixed set of presets, not a width-responsive layout, so at high browser zoom a
@@ -91,12 +94,28 @@ the grid reflows normally.
 
 ## Performance
 
-File-size expectations are bands, not a single target, and no code path branches
-on file size:
+File-size bands are a **performance expectation, not a behavioural spec**.
+Nothing branches on file size — there is **no degraded mode, no warning
+threshold, and no refusal ceiling**. Every file opens the same way through the
+same code; the page cache holds ≤ 16 MiB behind the viewport whatever the
+document size, so a 2 GB file opens as fast as a 2 KB one.
 
-- up to ~700 MB — fully responsive;
-- ~700 MB to ~2 GB — usable, with the scrollbar thumb getting coarser;
-- any openable size — must not crash the tab.
+- **≤ ~700 MB — fully responsive.** Scroll, keyboard navigation, Goto, selection
+  and copy all keep up.
+- **~700 MB to ~2 GB — usable, with scrollbar-thumb granularity the thing that
+  degrades.** A thumb drag moves roughly 75,000 rows per pixel at 700 MB and
+  215,000 at 2 GB, so the thumb becomes a coarse gross-position control. **Goto
+  (`Ctrl+G`) is the exact path** and is unaffected by file size.
+- **Any openable size — must not crash the tab.** The only ceiling is what the
+  browser's File API will open.
+
+The bands are checked by a manual pass on real large files, not by the automated
+suite: the synthetic `size = 2e9` tests prove the coordinate math and that
+nothing allocates the whole document, but they cannot measure frame times. See
+[`docs/manual-passes.md`](./docs/manual-passes.md), which also records whether
+that pass found main-thread work attributable to paging — the evidence that
+would trigger building the deferred worker
+([ADR-0001](./docs/adr/0001-bytesource-boundary-and-deferred-worker.md)).
 
 ## Development
 
