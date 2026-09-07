@@ -17,6 +17,7 @@ const DIRECTORY_REFUSAL = 'That’s a folder — drop a single file instead.'
 
 const documentStore = useDocumentStore()
 const createByteSource = inject(byteSourceFactoryKey, defaultByteSourceFactory)
+const button = useTemplateRef<HTMLButtonElement>('button')
 const input = useTemplateRef<HTMLInputElement>('input')
 const refusal = ref<string | null>(null)
 
@@ -81,6 +82,14 @@ function onDragOver(event: DragEvent): void {
 onMounted(() => {
   window.addEventListener('dragover', onDragOver)
   window.addEventListener('drop', onDrop)
+  // Focus starts on a real control, not nowhere (ADR-0005): with no document
+  // open the Open-file button is the one thing to do, and Tab from here walks
+  // the toolbar. Guarded on there being no source so a remount with a document
+  // already open does not yank focus back off the Viewport, which owns it once
+  // a file is open (HexViewer's focus-on-open).
+  if (documentStore.source === null) {
+    button.value?.focus()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -91,7 +100,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="file-drop-zone">
-    <button type="button" class="file-drop-zone__button" @click="onPickClick">Open file…</button>
+    <button ref="button" type="button" class="file-drop-zone__button" @click="onPickClick">
+      Open file…
+    </button>
     <input ref="input" class="file-drop-zone__input" type="file" hidden @change="onPick" />
     <p v-if="refusal" class="file-drop-zone__refusal" role="alert">{{ refusal }}</p>
   </div>

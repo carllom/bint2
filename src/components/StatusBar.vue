@@ -54,49 +54,73 @@ const selLength = computed(() => (range.value === null ? 0 : range.value.end - r
 // The exact byte count with a human-readable companion for the sizes the tool
 // actually opens — both, so nothing about the size is ever only approximate.
 const sizeText = computed(() => toByteSizeDetail(documentStore.fileSize))
+
+// The action live region (#28, ADR-0005): the spoken counterpart to the visible
+// copy status. It mirrors the store's one `copyStatus` — the same source the
+// visible bar reads — so it announces a copy success or the over-cap refusal and
+// nothing the bar does not already show. Transient: `copyStatus` is nulled the
+// moment its Selection moves, and the region empties with it. It is its own
+// element, never the visible bar (never spoken whole) and never the Viewport's
+// cursor region (whose ~200 ms debounce would delay a refusal, and whose next
+// Cursor move would stomp it).
+const actionAnnouncement = computed(() => documentStore.copyStatus?.message ?? '')
 </script>
 
 <template>
-  <div v-if="hasSource" class="status-bar">
-    <span v-if="cursor !== null" class="status-bar__group" data-field="cursor-offset">
-      <span class="status-bar__label">cur</span>
-      <span>0x{{ cursorHex }}</span>
-      <span class="status-bar__sep">·</span>
-      <span>{{ cursor }}</span>
-    </span>
-
-    <span v-if="cursor !== null" class="status-bar__group">
-      <span class="status-bar__label">u8</span>
-      <span data-field="byte-unsigned">{{ byte.unsigned }}</span>
-      <span class="status-bar__label">i8</span>
-      <span data-field="byte-signed">{{ byte.signed }}</span>
-      <span class="status-bar__label">bin</span>
-      <span data-field="byte-binary">{{ byte.binary }}</span>
-    </span>
-
-    <span v-if="range !== null" class="status-bar__group">
-      <span class="status-bar__label">sel</span>
-      <span data-field="selection-start">0x{{ selStartHex }}</span>
-      <span class="status-bar__sep">→</span>
-      <span data-field="selection-end">0x{{ selEndHex }}</span>
-      <span class="status-bar__sep">·</span>
-      <span data-field="selection-length">{{ selLength }} B</span>
-    </span>
-
-    <span
-      v-if="documentStore.copyStatus !== null"
-      class="status-bar__group status-bar__copy"
-      :class="{ 'status-bar__copy--refused': !documentStore.copyStatus.ok }"
-      data-field="copy-status"
+  <div class="status-bar-area">
+    <!-- Transient, role=status, its own element — see `actionAnnouncement` above
+         and ADR-0005's "Two live regions, with disjoint jobs". Unconditional so
+         it is already in the accessibility tree before the first copy. -->
+    <div
+      class="visually-hidden"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-field="action-live-region"
     >
-      {{ documentStore.copyStatus.message }}
-    </span>
+      {{ actionAnnouncement }}
+    </div>
+    <div v-if="hasSource" class="status-bar">
+      <span v-if="cursor !== null" class="status-bar__group" data-field="cursor-offset">
+        <span class="status-bar__label">cur</span>
+        <span>0x{{ cursorHex }}</span>
+        <span class="status-bar__sep">·</span>
+        <span>{{ cursor }}</span>
+      </span>
 
-    <span class="status-bar__group status-bar__doc">
-      <span data-field="file-name">{{ documentStore.fileName }}</span>
-      <span class="status-bar__sep">·</span>
-      <span data-field="file-size">{{ sizeText }}</span>
-    </span>
+      <span v-if="cursor !== null" class="status-bar__group">
+        <span class="status-bar__label">u8</span>
+        <span data-field="byte-unsigned">{{ byte.unsigned }}</span>
+        <span class="status-bar__label">i8</span>
+        <span data-field="byte-signed">{{ byte.signed }}</span>
+        <span class="status-bar__label">bin</span>
+        <span data-field="byte-binary">{{ byte.binary }}</span>
+      </span>
+
+      <span v-if="range !== null" class="status-bar__group">
+        <span class="status-bar__label">sel</span>
+        <span data-field="selection-start">0x{{ selStartHex }}</span>
+        <span class="status-bar__sep">→</span>
+        <span data-field="selection-end">0x{{ selEndHex }}</span>
+        <span class="status-bar__sep">·</span>
+        <span data-field="selection-length">{{ selLength }} B</span>
+      </span>
+
+      <span
+        v-if="documentStore.copyStatus !== null"
+        class="status-bar__group status-bar__copy"
+        :class="{ 'status-bar__copy--refused': !documentStore.copyStatus.ok }"
+        data-field="copy-status"
+      >
+        {{ documentStore.copyStatus.message }}
+      </span>
+
+      <span class="status-bar__group status-bar__doc">
+        <span data-field="file-name">{{ documentStore.fileName }}</span>
+        <span class="status-bar__sep">·</span>
+        <span data-field="file-size">{{ sizeText }}</span>
+      </span>
+    </div>
   </div>
 </template>
 
@@ -139,4 +163,7 @@ const sizeText = computed(() => toByteSizeDetail(documentStore.fileSize))
 .status-bar__copy--refused {
   color: var(--color-cursor);
 }
+
+/* `.visually-hidden` (the action live region) is the shared global utility in
+   assets/main.css — scoped styles can't reach it and it must not diverge. */
 </style>

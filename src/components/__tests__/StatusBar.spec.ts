@@ -49,10 +49,12 @@ describe('the status bar (#23)', () => {
   it('shows nothing until a document is open', () => {
     const app = mountApp()
     expect(app.find('.status-bar').exists()).toBe(false)
-    // No `[data-field]` anywhere but the Viewport's own cursor live region
-    // (#27) — present, empty, and unconditional, unlike every status-bar field.
+    // The only `[data-field]` elements before a document opens are the two live
+    // regions (#27, #28) — present, empty, and unconditional, unlike every
+    // status-bar field. The cursor region lives in the Viewport, the action
+    // region in the status-bar area, so they land in that DOM order.
     const fields = app.findAll('[data-field]').map((el) => el.attributes('data-field'))
-    expect(fields).toEqual(['cursor-live-region'])
+    expect(fields).toEqual(['cursor-live-region', 'action-live-region'])
   })
 
   it('always shows the file name and total size while a document is open', async () => {
@@ -229,5 +231,78 @@ describe('the status bar (#23)', () => {
     expect(footer.attributes('role')).toBeUndefined()
     expect(app.find('.status-bar').attributes('aria-live')).toBeUndefined()
     expect(app.find('.status-bar').attributes('role')).toBeUndefined()
+  })
+})
+
+describe('the action live region (#28)', () => {
+  const action = (app: VueWrapper) => app.find('[data-field="action-live-region"]')
+
+  it('is a transient, visually-hidden role=status region, present and empty from the start', () => {
+    const app = mountApp()
+    const region = action(app)
+
+    expect(region.exists()).toBe(true) // unconditional — no document open yet
+    expect(region.attributes('role')).toBe('status')
+    expect(region.attributes('aria-live')).toBe('polite')
+    expect(region.text()).toBe('')
+    // It is its own element, not the visible bar and not the footer.
+    expect(region.classes()).not.toContain('status-bar')
+    expect(region.classes()).toContain('visually-hidden')
+    expect(region.element.closest('.status-bar')).toBeNull()
+  })
+
+  it('speaks a copy success', async () => {
+    const app = mountApp()
+    await openBytes(Array.from({ length: 64 }, (_u, i) => i))
+    const store = useDocumentStore(pinia)
+
+    store.copyStatus = { ok: true, message: 'Copied 4 bytes to the clipboard as hex.' }
+    await flushPromises()
+
+    expect(action(app).text()).toBe('Copied 4 bytes to the clipboard as hex.')
+  })
+
+  it('speaks the over-cap copy refusal', async () => {
+    const app = mountApp()
+    await openBytes(Array.from({ length: 64 }, (_u, i) => i))
+    const store = useDocumentStore(pinia)
+
+    store.copyStatus = {
+      ok: false,
+      message: 'Selection is 9.0 MiB — over the 8 MiB copy limit. Nothing was copied.',
+    }
+    await flushPromises()
+
+    expect(action(app).text()).toContain('Nothing was copied.')
+  })
+
+  it('is a distinct element from the Viewport cursor region (ADR-0005: disjoint jobs)', async () => {
+    const app = mountApp()
+    await openBytes([1, 2, 3, 4])
+
+    const cursorRegion = app.find('[data-field="cursor-live-region"]').element
+    const actionRegion = action(app).element
+    expect(cursorRegion).not.toBe(actionRegion)
+    // Neither contains the other — they queue independently for a screen reader,
+    // and the cursor debounce cannot delay a copy refusal.
+    expect(cursorRegion.contains(actionRegion)).toBe(false)
+    expect(actionRegion.contains(cursorRegion)).toBe(false)
+  })
+
+  it('clears when the copy status goes stale, leaving nothing to be re-read', async () => {
+    const app = mountApp()
+    await openBytes(Array.from({ length: 64 }, (_u, i) => i))
+    const store = useDocumentStore(pinia)
+
+    store.setCursor(4)
+    store.copyStatus = { ok: true, message: 'Copied 1 byte to the clipboard as hex.' }
+    await flushPromises()
+    expect(action(app).text()).toContain('Copied 1 byte')
+
+    // Moving the Selection makes the message stale — the store nulls it, and the
+    // region empties with it.
+    store.setCursor(8)
+    await flushPromises()
+    expect(action(app).text()).toBe('')
   })
 })
