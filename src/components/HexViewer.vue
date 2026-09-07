@@ -1,38 +1,69 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
-import { addressWidthFor } from '@/core'
-import type { ByteSource } from '@/core'
+import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
+import {
+  addressWidthFor,
+  offsetFromThumbPixel,
+  offsetOfRow,
+  rowCount,
+  rowOfOffset,
+  visibleRows,
+} from '@/core'
+import type { ViewportMetrics } from '@/core'
 import { DomHexRenderer } from '@/rendering'
 import type { HexRowView } from '@/rendering'
+import VirtualScrollbar from '@/components/VirtualScrollbar.vue'
 import { useDocumentStore } from '@/stores/document'
 
-// The tracer bullet (plan M3, trimmed): the first screen of the document, no
-// scrolling. `bytesPerRow` presets and a measured row height arrive with the
-// scrollbar milestone (M4) behind viewport.ts; until then the row width is
-// fixed and the screenful is a constant.
-const BYTES_PER_ROW = 16
-const VISIBLE_ROWS = 48
+// The Viewport (CONTEXT.md): the bounded window of the document on screen. It
+// never depends on a browser layout height — `topByteOffset` in the store is the
+// only coordinate (ADR-0006), row height is measured from a probe glyph and fed
+// to the pure viewport surface as an input, and the custom scrollbar is the only
+// scrollbar at every file size.
+
+const MIN_THUMB_PX = 24 // ADR-0006 default, pinned by the viewport spec
+// Pre-measurement fallbacks, from --font-size (13px) * --line-height (1.4). Used
+// only until the probe renders; overwritten by the first real measurement.
+const DEFAULT_ROW_PX = 18
+const DEFAULT_VIEWPORT_PX = DEFAULT_ROW_PX * 40
+// Row bytes kept around a scroll so returning to them repaints without a `··`
+// flash (user story 21). A stopgap: the real page cache (#20) lands below the
+// ByteSource seam and makes `readSync` the fast path.
+const RETAINED_ROWS_CAP = 512
 
 const documentStore = useDocumentStore()
 const gridEl = useTemplateRef<HTMLElement>('grid')
+const rowAreaEl = useTemplateRef<HTMLElement>('rowArea')
+const probeEl = useTemplateRef<HTMLElement>('probe')
 const hasSource = shallowRef(false)
+
+const rowPx = shallowRef(DEFAULT_ROW_PX)
+const viewportPx = shallowRef(DEFAULT_VIEWPORT_PX)
+
+const metrics = computed<ViewportMetrics>(() => ({
+  size: documentStore.fileSize,
+  bytesPerRow: documentStore.bytesPerRow,
+  viewportPx: viewportPx.value,
+  rowPx: rowPx.value,
+  // The track spans the row area — one measurement feeds both.
+  trackPx: viewportPx.value,
+  minThumbPx: MIN_THUMB_PX,
+}))
 
 let renderer: DomHexRenderer | null = null
 let rows: HexRowView[] = []
 let addressWidth = 8
-// Bumped on every document change; a read that resolves against a stale
-// generation is dropped rather than painted (plan §4).
+// Bumped on every document change; a read resolving against a stale generation
+// is dropped rather than painted (plan §4).
 let generation = 0
 let paintQueued = false
+const retained = new Map<number, Uint8Array>()
+const inFlight = new Set<number>()
 
 function paint(): void {
-  renderer?.render({ rows, bytesPerRow: BYTES_PER_ROW, addressWidth })
+  renderer?.render({ rows, bytesPerRow: documentStore.bytesPerRow, addressWidth })
 }
 
-/**
- * Coalesce the repaints from a screenful of reads settling into one per tick —
- * otherwise opening a file triggers a full-grid re-render per row.
- */
+/** Coalesce a burst of settling reads into one repaint per tick. */
 function schedulePaint(): void {
   if (paintQueued) {
     return
@@ -44,59 +75,204 @@ function schedulePaint(): void {
   })
 }
 
-function load(source: ByteSource | null): void {
-  generation += 1
-  const thisGeneration = generation
-  hasSource.value = source !== null
+function measure(): void {
+  const probeHeight = probeEl.value?.getBoundingClientRect().height ?? 0
+  if (probeHeight > 0) {
+    rowPx.value = probeHeight
+  }
+  const areaHeight = rowAreaEl.value?.getBoundingClientRect().height ?? 0
+  if (areaHeight > 0) {
+    viewportPx.value = areaHeight
+  }
+}
 
+/**
+ * Keep a row's bytes at the most-recently-used end of {@link retained} and evict
+ * from the least-recently-used end. Visible rows are refreshed to MRU on every
+ * `syncRows`, and the cap is far larger than any screenful, so eviction never
+ * reaches a row that is currently on screen.
+ */
+function retain(offset: number, bytes: Uint8Array): void {
+  retained.delete(offset)
+  retained.set(offset, bytes)
+  while (retained.size > RETAINED_ROWS_CAP) {
+    retained.delete(retained.keys().next().value!)
+  }
+}
+
+function applyBytes(offset: number, bytes: Uint8Array, gen: number): void {
+  if (gen !== generation) {
+    return // a newer document opened; this read is stale
+  }
+  retain(offset, bytes)
+  const index = rows.findIndex((row) => row.offset === offset)
+  if (index !== -1) {
+    rows[index] = { offset, bytes }
+  }
+  schedulePaint()
+}
+
+/** Fetch bytes for every visible row that has none yet. */
+function requestRows(gen: number): void {
+  const source = documentStore.source
+  if (!source) {
+    return
+  }
+  const bytesPerRow = documentStore.bytesPerRow
+  for (const row of rows) {
+    if (row.bytes !== null || inFlight.has(row.offset)) {
+      continue
+    }
+    const offset = row.offset
+    const length = Math.min(bytesPerRow, source.size - offset)
+
+    const hit = source.readSync(offset, length)
+    if (hit) {
+      applyBytes(offset, hit, gen)
+      continue
+    }
+
+    inFlight.add(offset)
+    source
+      .read(offset, length)
+      .then((bytes) => applyBytes(offset, bytes, gen))
+      .catch(() => {
+        // read-failed / source-closed: leave the row as ·· (ADR-0004).
+      })
+      .finally(() => {
+        // Only clear our own entry — a stale read from a previous document must
+        // not delete an offset a newer document's read now owns.
+        if (gen === generation) {
+          inFlight.delete(offset)
+        }
+      })
+  }
+}
+
+let syncQueued = false
+
+/**
+ * Opening a document mutates `source`, `fileSize` and `topByteOffset` in one
+ * tick, and a resize can change several metrics at once. Coalesce the resulting
+ * {@link syncRows} calls into one per tick; the first paint on open goes through
+ * `syncRows` directly.
+ */
+function scheduleSync(): void {
+  if (syncQueued) {
+    return
+  }
+  syncQueued = true
+  queueMicrotask(() => {
+    syncQueued = false
+    syncRows()
+  })
+}
+
+/** Rebuild the visible row set from `topByteOffset` and repaint. */
+function syncRows(): void {
+  const source = documentStore.source
   if (!source) {
     rows = []
-    addressWidth = 8
     paint()
     return
   }
 
-  addressWidth = addressWidthFor(source.size)
-  const totalRows = Math.ceil(source.size / BYTES_PER_ROW)
-  const rowCount = Math.min(VISIBLE_ROWS, totalRows)
+  const m = metrics.value
+  const bytesPerRow = m.bytesPerRow
+  const firstRow = rowOfOffset(documentStore.topByteOffset, bytesPerRow)
+  // One row past what fits, so a viewport that is not an exact multiple of the
+  // row height still has its last sliver filled (it is clipped by overflow).
+  const count = Math.max(0, Math.min(rowCount(m) - firstRow, visibleRows(m) + 1))
 
-  rows = Array.from({ length: rowCount }, (_unused, index) => ({
-    offset: index * BYTES_PER_ROW,
-    bytes: null as Uint8Array | null,
-  }))
-  paint() // placeholders first
-
-  rows.forEach((row, index) => {
-    const length = Math.min(BYTES_PER_ROW, source.size - row.offset)
-    const hit = source.readSync(row.offset, length)
-    if (hit) {
-      rows[index] = { offset: row.offset, bytes: hit }
-      schedulePaint()
-      return
+  rows = Array.from({ length: count }, (_unused, index) => {
+    const offset = offsetOfRow(firstRow + index, bytesPerRow)
+    const cached = retained.get(offset)
+    if (cached !== undefined) {
+      retain(offset, cached) // a visible row is always most-recently-used
     }
-    source
-      .read(row.offset, length)
-      .then((bytes) => {
-        if (thisGeneration !== generation) {
-          return // a newer document opened; this read is stale
-        }
-        rows[index] = { offset: row.offset, bytes }
-        schedulePaint()
-      })
-      .catch(() => {
-        // read-failed / source-closed: leave the row as ·· (ADR-0004).
-      })
+    return { offset, bytes: cached ?? null }
   })
+  paint() // resident rows and placeholders now; arrivals repaint
+  requestRows(generation)
 }
+
+function onSourceChange(): void {
+  generation += 1
+  retained.clear()
+  inFlight.clear()
+  const source = documentStore.source
+  hasSource.value = source !== null
+  addressWidth = source ? addressWidthFor(source.size) : 8
+  measure()
+  syncRows()
+}
+
+let wheelAccum = 0
+
+function wheelRows(event: WheelEvent): number {
+  switch (event.deltaMode) {
+    case 1: // DOM_DELTA_LINE
+      return event.deltaY
+    case 2: // DOM_DELTA_PAGE — a screen, minus a row of overlap
+      return event.deltaY * Math.max(1, visibleRows(metrics.value) - 1)
+    default: // DOM_DELTA_PIXEL
+      return event.deltaY / Math.max(rowPx.value, 1)
+  }
+}
+
+function onWheel(event: WheelEvent): void {
+  if (!hasSource.value) {
+    return
+  }
+  wheelAccum += wheelRows(event)
+  const deltaRows = Math.trunc(wheelAccum)
+  if (deltaRows === 0) {
+    return
+  }
+  wheelAccum -= deltaRows
+  documentStore.scrollTo(
+    documentStore.topByteOffset + deltaRows * documentStore.bytesPerRow,
+    metrics.value,
+  )
+}
+
+function onScrollToPixel(thumbTopPx: number): void {
+  // `offsetFromThumbPixel` already aligns and clamps; funnelling through
+  // `scrollTo` keeps `clampTopOffset` the one and only choke point (ADR-0006).
+  documentStore.scrollTo(offsetFromThumbPixel(thumbTopPx, metrics.value), metrics.value)
+}
+
+let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   renderer = new DomHexRenderer(gridEl.value!)
-  watch(() => documentStore.source, load, { immediate: true })
+
+  resizeObserver = new ResizeObserver(() => {
+    measure()
+  })
+  if (probeEl.value) {
+    resizeObserver.observe(probeEl.value)
+  }
+  if (rowAreaEl.value) {
+    resizeObserver.observe(rowAreaEl.value)
+  }
+  window.addEventListener('resize', measure)
+
+  watch(() => documentStore.source, onSourceChange, { immediate: true })
+  watch(() => documentStore.topByteOffset, scheduleSync) // repaint on scroll
+  watch(metrics, (m) => {
+    // A grown viewport or a shorter row (zoom-out) lowers maxFirstRow — pull a
+    // near-EOF top back through the choke point before repainting.
+    documentStore.scrollTo(documentStore.topByteOffset, m)
+    scheduleSync() // repaint on resize / zoom / bytes-per-row
+  })
 })
 
 onBeforeUnmount(() => {
   generation += 1 // abandon in-flight reads
   renderer = null // and any queued repaint
+  resizeObserver?.disconnect()
+  window.removeEventListener('resize', measure)
 })
 </script>
 
@@ -105,16 +281,38 @@ onBeforeUnmount(() => {
     <p v-if="!hasSource" class="hex-viewer__empty">
       No file open. Use “Open file…” or drop a file onto the window.
     </p>
-    <div ref="grid" class="hex-viewer__grid" />
+    <div ref="rowArea" class="hex-viewer__row-area" @wheel.prevent="onWheel">
+      <span ref="probe" class="hex-viewer__probe" aria-hidden="true">00</span>
+      <div ref="grid" class="hex-viewer__grid" />
+    </div>
+    <VirtualScrollbar
+      v-if="hasSource"
+      :metrics="metrics"
+      :top-byte-offset="documentStore.topByteOffset"
+      @scroll-to-pixel="onScrollToPixel"
+    />
   </div>
 </template>
 
 <style scoped>
 .hex-viewer {
+  display: flex;
   height: 100%;
-  overflow: auto;
+  /* No native scrollbar anywhere — the custom row-space bar is the only one. */
+  overflow: hidden;
   /* ADR-0003: native text selection is unusable over the grid. */
   user-select: none;
+}
+
+.hex-viewer__row-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  /* Heavy zoom widens a row past the viewport (ADR-0005): scroll it sideways.
+     The vertical axis is the custom scrollbar's, never the browser's. */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .hex-viewer__empty {
@@ -123,7 +321,18 @@ onBeforeUnmount(() => {
 }
 
 .hex-viewer__grid {
-  padding: 0.25rem 0.5rem;
+  padding: 0 0.5rem;
+}
+
+/* Laid out (so it can be measured) but not shown, and never in the way. */
+.hex-viewer__probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  white-space: pre;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* `:not([hidden])` so this rule does not out-specify the UA `[hidden]` rule and
