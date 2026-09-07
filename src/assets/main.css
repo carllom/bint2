@@ -52,3 +52,19 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Perceivable to assistive tech, invisible on screen. `display: none` and
+   `visibility: hidden` are wrong here — both drop out of the accessibility tree
+   along with the pixels, and the usage note and the two live regions (ADR-0005)
+   need the opposite. One rule, shared by every such region. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

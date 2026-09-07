@@ -194,6 +194,17 @@ describe('the file-open reject policy (#21)', () => {
     expect(app.findAll('.hex-row')).toHaveLength(0)
   })
 
+  it('holds focus on the Open-file button on load, so the keyboard starts somewhere real (#28)', () => {
+    const app = mountApp()
+    // A real <button> beside the hidden <input type=file> (ADR-0005), and it is
+    // where focus sits before anything is open — Tab from here reaches the
+    // bytes-per-row presets, not the browser chrome.
+    const button = app.find('.file-drop-zone__button')
+    expect(button.element.tagName).toBe('BUTTON')
+    expect(app.find('input[type=file]').attributes('hidden')).toBeDefined()
+    expect(document.activeElement).toBe(button.element)
+  })
+
   it('closes the first document and fully replaces the view when a second opens', async () => {
     const created: ByteSource[] = []
     const factory = (file: File): ByteSource => {
@@ -206,7 +217,12 @@ describe('the file-open reject policy (#21)', () => {
     const store = useDocumentStore(pinia)
 
     drop({
-      files: [fileOf(Array.from({ length: 16 }, () => 0xaa), 'a.bin')],
+      files: [
+        fileOf(
+          Array.from({ length: 16 }, () => 0xaa),
+          'a.bin',
+        ),
+      ],
       items: [entryItem(false)],
     })
     await flushPromises()

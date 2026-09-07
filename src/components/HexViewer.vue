@@ -680,21 +680,8 @@ onBeforeUnmount(() => {
   overflow-y: hidden;
 }
 
-/* Perceivable to assistive tech, invisible on screen — `display: none` and
-   `visibility: hidden` are wrong here because both drop out of the
-   accessibility tree along with the pixels (the usage note and the cursor
-   live region need the opposite). */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
+/* `.visually-hidden` (the usage note and the cursor live region) is the shared
+   global utility in assets/main.css — scoped styles can't reach it. */
 
 .hex-viewer__empty {
   padding: 0.5rem;
