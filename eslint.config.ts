@@ -31,5 +31,28 @@ export default defineConfigWithVueTs(
     files: ['src/**/__tests__/*'],
   },
 
+  {
+    // src/core is the framework-free core (see src/core/index.ts). Enforced here
+    // as well as by src/core/__tests__/framework-free.spec.ts.
+    name: 'app/core-is-framework-free',
+    files: ['src/core/**/*.{ts,mts}'],
+    ignores: ['src/core/**/__tests__/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            { name: 'vue', message: 'src/core must stay framework-free.' },
+            { name: 'pinia', message: 'src/core must stay framework-free.' },
+            { name: 'vue-router', message: 'src/core must stay framework-free.' },
+          ],
+          patterns: [
+            { group: ['@vue/*', '@vitejs/*'], message: 'src/core must stay framework-free.' },
+          ],
+        },
+      ],
+    },
+  },
+
   skipFormatting,
 )
