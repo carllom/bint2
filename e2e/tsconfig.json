@@ -1,4 +1,15 @@
 {
-  "extends": "@tsconfig/node24/tsconfig.json",
-  "include": ["./**/*"]
+  // The e2e suite runs in real browsers over the production build, and its
+  // helpers touch both Node APIs (fixture generation, `node:fs`) and DOM globals
+  // (inside `page.evaluate` callbacks). Mirror the app's DOM config and add the
+  // Node types on top. `@vue/tsconfig` supplies `moduleResolution: bundler`, so
+  // the extensionless relative imports here resolve the same way `src/` does.
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "include": ["./**/*"],
+  "compilerOptions": {
+    "types": ["node"],
+
+    // `vue-tsc --build` produces a .tsbuildinfo file for incremental type-checking.
+    "tsBuildInfoFile": "../node_modules/.tmp/tsconfig.e2e.tsbuildinfo"
+  }
 }
