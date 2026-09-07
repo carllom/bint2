@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 import {
   addressWidthFor,
+  ByteSourceError,
   isCollapsed,
   offsetFromThumbPixel,
   offsetOfRow,
@@ -24,6 +25,13 @@ import { useDocumentStore } from '@/stores/document'
 // scrollbar at every file size.
 
 const MIN_THUMB_PX = 24 // ADR-0006 default, pinned by the viewport spec
+/**
+ * Past this many consecutive `read-failed` rejections, the dead-source banner
+ * escalates from silent self-healing to the same surface `source-gone` gets,
+ * with different wording (#26, ADR-0004). A tuning constant, not a decision;
+ * one successful read resets the count.
+ */
+const READ_FAILURE_ESCALATION_THRESHOLD = 3
 // Pre-measurement fallbacks, from --font-size (13px) * --line-height (1.4). Used
 // only until the probe renders; overwritten by the first real measurement.
 const DEFAULT_ROW_PX = 18
@@ -59,6 +67,9 @@ let paintQueued = false
 // of settling scrolls. Bytes the reader returns to are served synchronously by
 // the page cache's `readSync` below the ByteSource seam (#20), not held here.
 const inFlight = new Set<number>()
+// Consecutive `read-failed` rejections since the last success — the
+// escalation counter (#26, ADR-0004). Reset on a new source and on success.
+let consecutiveReadFailures = 0
 
 function paint(): void {
   renderer?.render({
@@ -145,9 +156,30 @@ function requestRows(gen: number): void {
     inFlight.add(offset)
     source
       .read(offset, length)
-      .then((bytes) => applyBytes(offset, bytes, gen))
-      .catch(() => {
-        // read-failed / source-closed: leave the row as ·· (ADR-0004).
+      .then((bytes) => {
+        if (gen === generation) {
+          consecutiveReadFailures = 0
+          documentStore.setSourceHealth('ok') // one success resets the escalation
+        }
+        applyBytes(offset, bytes, gen)
+      })
+      .catch((error: unknown) => {
+        if (gen !== generation) {
+          return // stale generation — the reader opened another document
+        }
+        if (!(error instanceof ByteSourceError)) {
+          return
+        }
+        if (error.code === 'source-gone') {
+          documentStore.setSourceHealth('gone') // the one visible, persistent case
+        } else if (error.code === 'read-failed') {
+          consecutiveReadFailures += 1
+          if (consecutiveReadFailures >= READ_FAILURE_ESCALATION_THRESHOLD) {
+            documentStore.setSourceHealth('failing')
+          }
+        }
+        // source-closed, or anything else: leave the row as ·· (ADR-0004) —
+        // no chrome, and never user-visible.
       })
       .finally(() => {
         // Only clear our own entry — a stale read from a previous document must
@@ -217,6 +249,7 @@ function syncRows(): void {
 function onSourceChange(): void {
   generation += 1
   inFlight.clear()
+  consecutiveReadFailures = 0
   const source = documentStore.source
   hasSource.value = source !== null
   addressWidth = source ? addressWidthFor(source.size) : 8
@@ -234,6 +267,8 @@ function onSourceChange(): void {
 function onBytesPerRowChange(): void {
   generation += 1
   inFlight.clear()
+  // consecutiveReadFailures is deliberately NOT reset: it tracks the source's
+  // demonstrated reliability, which a cosmetic reshape does not change (#26).
 }
 
 let wheelAccum = 0

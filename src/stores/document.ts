@@ -28,6 +28,17 @@ export interface CopyStatus {
 }
 
 /**
+ * Whether the open document's {@link ByteSource} can still be trusted
+ * (#26, ADR-0004). `'ok'` shows no chrome. `'gone'` is the latched
+ * `source-gone` terminal state. `'failing'` is the escalation `HexViewer`
+ * raises after too many consecutive `read-failed` rejections — the same
+ * banner, different wording, and a single successful read resets it to
+ * `'ok'`. `source-closed` never reaches this: it fires only because the
+ * reader opened another document, and `open` below already resets to `'ok'`.
+ */
+export type SourceHealth = 'ok' | 'gone' | 'failing'
+
+/**
  * The open document: its {@link ByteSource}, its identity, and where the
  * Viewport sits in it. Shared through a store so the drop zone, viewer,
  * scrollbar and (later) toolbar / status bar don't prop-drill (plan §10).
@@ -60,6 +71,10 @@ export const useDocumentStore = defineStore('document', () => {
   // accessibility action region (#28) read the one source.
   const copyStatus = shallowRef<CopyStatus | null>(null)
 
+  // The dead-source banner's state (#26, ADR-0004). `HexViewer` is what
+  // observes the reads that drive this; the store just holds and resets it.
+  const sourceHealth = shallowRef<SourceHealth>('ok')
+
   // A copy message reports on the Selection it was made from; the moment that
   // Selection moves, the message is stale. (Opening a document is handled in
   // `open`, which nulls the Selection and the message together.)
@@ -81,6 +96,24 @@ export const useDocumentStore = defineStore('document', () => {
     topByteOffset.value = 0
     selection.value = null
     copyStatus.value = null
+    sourceHealth.value = 'ok'
+  }
+
+  /**
+   * Set by `HexViewer` — the sole writer — as it observes reads succeed or
+   * reject (#26, ADR-0004). `'gone'` latches: once set, only `open` (a new
+   * document) can move away from it. Without this guard, a `read-failed`
+   * rejection settling after the `source-gone` rejection that latched the
+   * source (both dispatched in the same batch of row reads, so I/O
+   * completion order rather than dispatch order decides which settles last)
+   * could downgrade the banner to `'failing'`, or a stale success could then
+   * dismiss it entirely — for a source that is in fact permanently dead.
+   */
+  function setSourceHealth(next: SourceHealth): void {
+    if (sourceHealth.value === 'gone' && next !== 'gone') {
+      return
+    }
+    sourceHealth.value = next
   }
 
   /** Snap an arbitrary offset onto a real byte `[0, size - 1]`. */
@@ -249,6 +282,7 @@ export const useDocumentStore = defineStore('document', () => {
     bytesPerRow,
     selection,
     copyStatus,
+    sourceHealth,
     open,
     scrollTo,
     gotoOffset,
@@ -256,5 +290,6 @@ export const useDocumentStore = defineStore('document', () => {
     setCursor,
     extendSelectionTo,
     copySelectionAsHex,
+    setSourceHealth,
   }
 })

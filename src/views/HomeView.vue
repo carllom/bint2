@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Phase-1 app shell. The toolbar carries the file-open control and the viewport
 // carries the hex grid; the status bar reads out where the Cursor is and what is
-// under it (#23), and the dead-source banner is populated later at M5 (see
-// docs/plan-phase1.md).
+// under it (#23), and the dead-source banner (#26) surfaces above the viewport
+// when the open document's source latches or repeatedly fails (ADR-0004).
 import BytesPerRowControl from '@/components/BytesPerRowControl.vue'
+import DeadSourceBanner from '@/components/DeadSourceBanner.vue'
 import FileDropZone from '@/components/FileDropZone.vue'
 import HexViewer from '@/components/HexViewer.vue'
 import StatusBar from '@/components/StatusBar.vue'
@@ -17,7 +18,9 @@ import StatusBar from '@/components/StatusBar.vue'
     </header>
     <!-- Populated only when the open document becomes a dead source (ADR-0004);
          zero-height otherwise, so it is not persistent chrome. -->
-    <div class="app-shell__banner" data-region="banner"></div>
+    <div class="app-shell__banner" data-region="banner">
+      <DeadSourceBanner />
+    </div>
     <main class="app-shell__viewport" data-region="viewport">
       <HexViewer />
     </main>

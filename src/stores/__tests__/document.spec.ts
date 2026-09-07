@@ -366,3 +366,49 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     expect(store.copyStatus).toBeNull()
   })
 })
+
+describe('sourceHealth — the dead-source banner state (#26, ADR-0004)', () => {
+  it('defaults to ok and resets to ok on open', () => {
+    const store = useDocumentStore()
+    expect(store.sourceHealth).toBe('ok')
+
+    store.open(sourceOfSize(64), 'a.bin')
+    store.setSourceHealth('failing')
+    expect(store.sourceHealth).toBe('failing')
+
+    store.open(sourceOfSize(64), 'b.bin')
+    expect(store.sourceHealth).toBe('ok')
+  })
+
+  it('takes ok and failing transitions freely', () => {
+    const store = useDocumentStore()
+    store.open(sourceOfSize(64), 'a.bin')
+
+    store.setSourceHealth('failing')
+    expect(store.sourceHealth).toBe('failing')
+    store.setSourceHealth('ok')
+    expect(store.sourceHealth).toBe('ok')
+  })
+
+  it('latches gone: neither a later read-failed escalation nor a stray success can move away from it, only open', () => {
+    const store = useDocumentStore()
+    store.open(sourceOfSize(64), 'a.bin')
+
+    store.setSourceHealth('gone')
+    expect(store.sourceHealth).toBe('gone')
+
+    // A read-failed rejection settling after the one that latched — e.g. a
+    // different row's fetch, in the same batch, resolving in a different
+    // order — must not downgrade the banner to the escalation wording.
+    store.setSourceHealth('failing')
+    expect(store.sourceHealth).toBe('gone')
+
+    // Nor can a stray success dismiss it entirely.
+    store.setSourceHealth('ok')
+    expect(store.sourceHealth).toBe('gone')
+
+    // Only opening a new document resets it.
+    store.open(sourceOfSize(64), 'b.bin')
+    expect(store.sourceHealth).toBe('ok')
+  })
+})
