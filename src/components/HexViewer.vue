@@ -1,21 +1,32 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  shallowRef,
+  useTemplateRef,
+  watch,
+} from 'vue'
 import {
   addressWidthFor,
   ByteSourceError,
+  describeSelection,
   isCollapsed,
   offsetFromThumbPixel,
   offsetOfRow,
   rangeOf,
   rowCount,
   rowOfOffset,
+  toByteSizeDetail,
   visibleRows,
 } from '@/core'
-import type { ViewportMetrics } from '@/core'
+import type { Selection, ViewportMetrics } from '@/core'
 import { DomHexRenderer } from '@/rendering'
 import type { HexRowView, SelectionView } from '@/rendering'
 import GotoBox from '@/components/GotoBox.vue'
 import VirtualScrollbar from '@/components/VirtualScrollbar.vue'
+import { useByteAt } from '@/composables/useByteAt'
 import { useDocumentStore } from '@/stores/document'
 
 // The Viewport (CONTEXT.md): the bounded window of the document on screen. It
@@ -36,6 +47,9 @@ const READ_FAILURE_ESCALATION_THRESHOLD = 3
 // only until the probe renders; overwritten by the first real measurement.
 const DEFAULT_ROW_PX = 18
 const DEFAULT_VIEWPORT_PX = DEFAULT_ROW_PX * 40
+/** Settle time for the cursor live region (ADR-0005): a held arrow key speaks
+ *  the destination once it stops, never the journey through every byte. */
+const CURSOR_ANNOUNCE_DEBOUNCE_MS = 200
 
 const documentStore = useDocumentStore()
 const gridEl = useTemplateRef<HTMLElement>('grid')
@@ -55,6 +69,19 @@ const metrics = computed<ViewportMetrics>(() => ({
   trackPx: viewportPx.value,
   minThumbPx: MIN_THUMB_PX,
 }))
+
+/**
+ * Names the open file for the Viewport's `role="application"` (ADR-0005) — the
+ * name and size read out the moment focus lands there, whether on open or from
+ * a screen reader revisiting the app. No file open names the tool instead.
+ */
+const viewportLabel = computed(() => {
+  const name = documentStore.fileName
+  if (name === null) {
+    return 'Hex viewer'
+  }
+  return `${name}, ${toByteSizeDetail(documentStore.fileSize)}, hex viewer`
+})
 
 let renderer: DomHexRenderer | null = null
 let rows: HexRowView[] = []
@@ -109,6 +136,51 @@ function schedulePaint(): void {
     paintQueued = false
     paint()
   })
+}
+
+// The cursor live region (#27, ADR-0005): a visually-hidden, polite sentence
+// keyed off the Selection alone, never the view — wheel and thumb-drag
+// scrolling touch none of this. Debounced so a held arrow key speaks only the
+// destination it settles on, not the journey through every byte along the way.
+//
+// `settledSelection` is the debounce's output: it holds the Selection only
+// once ~200 ms have passed with no further move. The byte it names is read
+// through `settledFocus` -> `useByteAt` (shared with the status bar's byte
+// fields, #23) so the point read itself only fires once per settle, same as
+// before, while `cursorAnnouncement` stays a plain computed over both — a
+// byte that resolves after the settle still lands in the right sentence
+// instead of being stuck unspoken, since the computed re-runs when it arrives.
+const settledSelection = shallowRef<Selection | null>(null)
+let announceTimer: ReturnType<typeof setTimeout> | null = null
+
+const settledFocus = computed(() => {
+  const sel = settledSelection.value
+  return sel !== null && isCollapsed(sel) ? sel.focus : null
+})
+const settledByte = useByteAt(
+  computed(() => documentStore.source),
+  settledFocus,
+)
+
+const cursorAnnouncement = computed(() => {
+  const sel = settledSelection.value
+  return sel === null ? '' : (describeSelection(sel, settledByte.value) ?? '')
+})
+
+/** Debounce a Selection change to the ~200 ms settle the ADR calls for. */
+function scheduleAnnounce(sel: Selection | null): void {
+  if (announceTimer !== null) {
+    clearTimeout(announceTimer)
+    announceTimer = null
+  }
+  if (sel === null) {
+    settledSelection.value = null // nothing to announce
+    return
+  }
+  announceTimer = setTimeout(() => {
+    announceTimer = null
+    settledSelection.value = sel
+  }, CURSOR_ANNOUNCE_DEBOUNCE_MS)
 }
 
 function measure(): void {
@@ -255,6 +327,14 @@ function onSourceChange(): void {
   addressWidth = source ? addressWidthFor(source.size) : 8
   measure()
   syncRows()
+
+  // A successful open moves focus to the Viewport (ADR-0005): `role="application"`
+  // plus `aria-label` (`viewportLabel`) announces the file's name and size the
+  // moment it lands there. Deferred a tick so the label has already re-rendered
+  // with the new file before a screen reader reads it off the focused element.
+  if (source !== null) {
+    void nextTick(() => rowAreaEl.value?.focus())
+  }
 }
 
 /**
@@ -506,7 +586,13 @@ onMounted(() => {
   watch(() => documentStore.source, onSourceChange, { immediate: true })
   watch(() => documentStore.bytesPerRow, onBytesPerRowChange)
   watch(() => documentStore.topByteOffset, scheduleSync) // repaint on scroll
-  watch(() => documentStore.selection, schedulePaint) // repaint on Cursor / Selection move
+  watch(
+    () => documentStore.selection,
+    (sel) => {
+      schedulePaint() // repaint on Cursor / Selection move
+      scheduleAnnounce(sel) // speak it, debounced (#27)
+    },
+  )
   watch(metrics, (m) => {
     // A grown viewport or a shorter row (zoom-out) lowers maxFirstRow — pull a
     // near-EOF top back through the choke point before repainting.
@@ -520,6 +606,9 @@ onBeforeUnmount(() => {
   renderer = null // and any queued repaint
   resizeObserver?.disconnect()
   window.removeEventListener('resize', measure)
+  if (announceTimer !== null) {
+    clearTimeout(announceTimer)
+  }
 })
 </script>
 
@@ -532,6 +621,9 @@ onBeforeUnmount(() => {
       ref="rowArea"
       class="hex-viewer__row-area"
       tabindex="0"
+      role="application"
+      :aria-label="viewportLabel"
+      aria-describedby="hex-viewer-usage"
       @wheel.prevent="onWheel"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
@@ -540,6 +632,21 @@ onBeforeUnmount(() => {
     >
       <span ref="probe" class="hex-viewer__probe" aria-hidden="true">00</span>
       <div ref="grid" class="hex-viewer__grid" />
+      <!-- Reading the grid as a document is a non-goal (ADR-0005): rows are
+           aria-hidden (DomHexRenderer) and never focusable. These two elements
+           are the entire accessibility surface for the byte grid itself. -->
+      <p id="hex-viewer-usage" class="visually-hidden">
+        Arrow keys move the byte cursor. Ctrl+G jumps to an offset. Tab leaves this view.
+      </p>
+      <div
+        class="visually-hidden"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-field="cursor-live-region"
+      >
+        {{ cursorAnnouncement }}
+      </div>
     </div>
     <VirtualScrollbar
       v-if="hasSource"
@@ -571,6 +678,22 @@ onBeforeUnmount(() => {
      The vertical axis is the custom scrollbar's, never the browser's. */
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* Perceivable to assistive tech, invisible on screen — `display: none` and
+   `visibility: hidden` are wrong here because both drop out of the
+   accessibility tree along with the pixels (the usage note and the cursor
+   live region need the opposite). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .hex-viewer__empty {

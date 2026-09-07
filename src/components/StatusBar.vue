@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, shallowRef, watch } from 'vue'
-import { isCollapsed, rangeOf, toBinary, toByteSize, toHex, toSignedByte } from '@/core'
+import { computed } from 'vue'
+import { isCollapsed, rangeOf, toBinary, toByteSizeDetail, toHex, toSignedByte } from '@/core'
+import { useByteAt } from '@/composables/useByteAt'
 import { useDocumentStore } from '@/stores/document'
 
 // The packed, at-a-glance readout (plan §7, #23): where the Cursor is, what the
@@ -25,41 +26,14 @@ const range = computed(() => {
   return sel !== null && !isCollapsed(sel) ? rangeOf(sel) : null
 })
 
-// The value of the single byte under the Cursor. Held here rather than derived,
-// because the byte may not be resident the instant the Cursor lands on it.
-const focusByte = shallowRef<number | null>(null)
-// Bumped on every Cursor move (both paths), so a slow `read` for a byte the
-// reader has already moved off cannot clobber the current one (plan §4).
-let generation = 0
-
-// A point read of one byte through the frozen ByteSource (ADR-0001) — never the
-// row path. A resident byte resolves synchronously via `readSync`; otherwise the
-// async `read` fills it in.
-watch(
-  () => [documentStore.source, cursor.value] as const,
-  ([source, focus]) => {
-    const gen = (generation += 1)
-    focusByte.value = null
-    if (source === null || focus === null || documentStore.fileSize === 0) {
-      return
-    }
-    const hit = source.readSync(focus, 1)
-    if (hit !== null && hit.length === 1) {
-      focusByte.value = hit[0]!
-      return
-    }
-    source
-      .read(focus, 1)
-      .then((bytes) => {
-        if (gen === generation && bytes.length === 1) {
-          focusByte.value = bytes[0]!
-        }
-      })
-      .catch(() => {
-        // read-failed / source-closed: the byte fields stay ·· (ADR-0004).
-      })
-  },
-  { immediate: true },
+// The value of the single byte under the Cursor — a point read through the
+// frozen ByteSource (ADR-0001), never the row path. Shared with the Viewport's
+// cursor live region (#27) via `useByteAt`, which resolves it synchronously
+// when resident and guards the async fallback against a Cursor or document
+// that has since moved on.
+const focusByte = useByteAt(
+  computed(() => documentStore.source),
+  cursor,
 )
 
 const cursorHex = computed(() => (cursor.value === null ? '' : toHex(cursor.value)))
@@ -79,9 +53,7 @@ const selLength = computed(() => (range.value === null ? 0 : range.value.end - r
 
 // The exact byte count with a human-readable companion for the sizes the tool
 // actually opens — both, so nothing about the size is ever only approximate.
-const sizeText = computed(
-  () => `${toByteSize(documentStore.fileSize)} (${documentStore.fileSize.toLocaleString()} bytes)`,
-)
+const sizeText = computed(() => toByteSizeDetail(documentStore.fileSize))
 </script>
 
 <template>
