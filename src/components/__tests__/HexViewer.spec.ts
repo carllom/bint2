@@ -5,7 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { byteSourceFactoryKey } from '@/byteSourceFactory'
 import type { ByteSource } from '@/core'
-import { FileByteSource, toAddress } from '@/core'
+import { ByteSourceError, FileByteSource, toAddress } from '@/core'
 import { useDocumentStore } from '@/stores/document'
 import HomeView from '@/views/HomeView.vue'
 
@@ -1308,5 +1308,202 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('00 01 02 03 04 05 06 07')
     expect(store.copyStatus?.ok).toBe(true)
+  })
+})
+
+// --- The dead-source banner (#26, ADR-0004) ---------------------------------
+
+/**
+ * A rejecting blob stub (plan §11's "failing" substitution): byte `i` holds
+ * `i & 0xff`, and every `slice(...).arrayBuffer()` succeeds until {@link
+ * goAway} is called, after which every one rejects the way a real `File`
+ * does once it has moved or been truncated out from under the reader.
+ * `sliceCalls` proves the latch stops touching the "disk".
+ */
+function flakyFile(
+  size: number,
+  name = 'moved.bin',
+): { file: File; goAway: () => void; sliceCalls: () => number } {
+  const bytes = new Uint8Array(size)
+  for (let i = 0; i < size; i++) bytes[i] = i & 0xff
+  let alive = true
+  let calls = 0
+  const file = {
+    size,
+    name,
+    slice(start: number, end: number) {
+      calls++
+      return {
+        arrayBuffer(): Promise<ArrayBuffer> {
+          if (!alive) {
+            return Promise.reject(new DOMException('file moved', 'NotFoundError'))
+          }
+          return Promise.resolve(bytes.slice(start, end).buffer)
+        },
+      }
+    },
+  } as unknown as File
+  return { file, goAway: () => (alive = false), sliceCalls: () => calls }
+}
+
+/** A source whose `read` always rejects with a chosen `ByteSourceError` code. */
+class AlwaysRejectingSource implements ByteSource {
+  readonly size = 4096
+  readonly #code: 'read-failed' | 'source-closed'
+  constructor(code: 'read-failed' | 'source-closed') {
+    this.#code = code
+  }
+  read(): Promise<Uint8Array> {
+    return Promise.reject(new ByteSourceError(this.#code))
+  }
+  readSync(): Uint8Array | null {
+    return null
+  }
+  prefetch(): void {}
+  close(): void {}
+}
+
+/**
+ * A source whose `read` rejects with `read-failed` until {@link heal} is
+ * called, after which every `read` succeeds. `readSync` always misses, so
+ * every row goes through `read` on every settle — the escalation counter's
+ * whole reason to exist.
+ */
+class FlakySource implements ByteSource {
+  readonly size = 4096
+  #healthy = false
+  read(offset: number, length: number): Promise<Uint8Array> {
+    if (!this.#healthy) {
+      return Promise.reject(new ByteSourceError('read-failed'))
+    }
+    const count = Math.max(0, Math.min(length, this.size - offset))
+    return Promise.resolve(Uint8Array.from({ length: count }, (_u, i) => (offset + i) & 0xff))
+  }
+  readSync(): Uint8Array | null {
+    return null
+  }
+  prefetch(): void {}
+  close(): void {}
+  heal(): void {
+    this.#healthy = true
+  }
+}
+
+function banner(app: VueWrapper) {
+  return app.find('[data-field="dead-source-banner"]')
+}
+
+describe('the dead-source banner (#26, ADR-0004)', () => {
+  it('shows nothing while the source is healthy', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    await openFile(app, [1, 2, 3, 4])
+
+    expect(store.sourceHealth).toBe('ok')
+    expect(banner(app).exists()).toBe(false)
+  })
+
+  it('latches on source-gone: names the file, keeps resident rows painting, and never retries the dead range', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    const PAGE = 64 * 1024
+    const { file, goAway, sliceCalls } = flakyFile(PAGE * 3, 'moved.bin')
+    const source = new FileByteSource(file)
+    store.open(source, 'moved.bin')
+    await flushPromises() // the first screen's page (plus its ±1 prefetch) goes resident
+
+    expect(store.sourceHealth).toBe('ok')
+    expect(banner(app).exists()).toBe(false)
+    expect(bytesText(app).slice(0, 4)).toEqual(['00', '01', '02', '03'])
+
+    // The file moves right now. Nothing already resident notices yet.
+    goAway()
+    expect(store.sourceHealth).toBe('ok')
+
+    // Scroll to a page that was never fetched — its read rejects source-gone
+    // and latches.
+    store.topByteOffset = PAGE * 2
+    await flushPromises()
+
+    expect(store.sourceHealth).toBe('gone')
+    const shown = banner(app)
+    expect(shown.exists()).toBe(true)
+    expect(shown.attributes('role')).toBe('alert')
+    expect(shown.text()).toContain('moved.bin')
+    expect(shown.text()).toMatch(/no longer available/i)
+    // Non-dismissible: nothing to click, nothing to focus (ADR-0005).
+    expect(shown.find('button').exists()).toBe(false)
+    expect(app.findAll('.hex-row--pending').length).toBeGreaterThan(0) // this page stays ·· forever
+
+    const callsAtLatch = sliceCalls()
+
+    // Scroll back to the resident first page: it still paints, latch or not.
+    store.topByteOffset = 0
+    await flushPromises()
+    expect(bytesText(app).slice(0, 4)).toEqual(['00', '01', '02', '03'])
+    expect(store.sourceHealth).toBe('gone') // still latched — the banner persists
+
+    // Scroll to the dead range again: still ·· forever, and the latch means
+    // it never touches the file again.
+    store.topByteOffset = PAGE * 2
+    await flushPromises()
+    expect(app.findAll('.hex-row--pending').length).toBeGreaterThan(0)
+    expect(sliceCalls()).toBe(callsAtLatch)
+  })
+
+  it('never shows chrome for source-closed rejections', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+    store.open(new AlwaysRejectingSource('source-closed'), 'closed.bin')
+    await flushPromises()
+
+    expect(store.sourceHealth).toBe('ok')
+    expect(banner(app).exists()).toBe(false)
+  })
+
+  it('shows no chrome for read-failed under the escalation threshold', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+
+    // Shrink the viewport to 1 visible row (2 requested) so each settle's
+    // failure count is precisely controllable.
+    stubHeight(app, '.hex-viewer__probe', 10)
+    stubHeight(app, '.hex-viewer__row-area', 10)
+
+    store.open(new FlakySource(), 'flaky.bin')
+    await flushPromises() // 2 consecutive failures — under the threshold of 3
+
+    expect(store.sourceHealth).toBe('ok')
+    expect(banner(app).exists()).toBe(false)
+  })
+
+  it('escalates past a threshold of consecutive read-failed rejections, then self-heals on the first success', async () => {
+    const app = mountApp()
+    const store = useDocumentStore(pinia)
+
+    stubHeight(app, '.hex-viewer__probe', 10)
+    stubHeight(app, '.hex-viewer__row-area', 10) // 1 visible row, 2 requested per settle
+
+    const source = new FlakySource()
+    store.open(source, 'flaky.bin')
+    await flushPromises() // 2 failures — under the threshold
+    expect(store.sourceHealth).toBe('ok')
+
+    store.topByteOffset = 32 // a fresh pair of rows — 2 more failures, crossing the threshold
+    await flushPromises()
+
+    expect(store.sourceHealth).toBe('failing')
+    const shown = banner(app)
+    expect(shown.exists()).toBe(true)
+    expect(shown.attributes('role')).toBe('alert')
+    expect(shown.text()).toContain('flaky.bin')
+    expect(shown.text()).toMatch(/could not be read/i)
+
+    source.heal()
+    store.topByteOffset = 64 // a fresh pair of rows, now both succeed
+    await flushPromises()
+
+    expect(store.sourceHealth).toBe('ok')
+    expect(banner(app).exists()).toBe(false)
   })
 })

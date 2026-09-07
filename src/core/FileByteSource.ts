@@ -25,6 +25,16 @@ function assertReadArgs(offset: number, length: number): void {
 }
 
 /**
+ * The stale-`File` case (ADR-0001, ADR-0004): a file moved or truncated
+ * mid-session makes `.arrayBuffer()` reject with a `NotFoundError`
+ * `DOMException`. The three-code taxonomy is not widened to catch more
+ * exception names — this is the one case that maps to `source-gone`.
+ */
+function isSourceGoneError(error: unknown): error is DOMException {
+  return error instanceof DOMException && error.name === 'NotFoundError'
+}
+
+/**
  * A {@link ByteSource} backed by a `File`, with a {@link PageCache} sitting
  * behind the frozen contract (ADR-0001, ADR-0002). `read` assembles whole Pages
  * the cache fetches with `File.slice(...).arrayBuffer()`; `readSync` is a real
@@ -35,14 +45,19 @@ function assertReadArgs(offset: number, length: number): void {
  * Holds the raw `File` and closes over nothing non-cloneable, so it stays
  * postable to a worker if one is ever built.
  *
- * Not yet implemented (their milestones own the tests): the `source-gone` latch
- * for a file that moves or is truncated mid-session (ADR-0004, M5).
+ * `source-gone` **latches** (ADR-0001, ADR-0004): once a read rejects because
+ * the file moved or was truncated out from under it, this instance is
+ * terminal — subsequent `read` calls reject immediately without touching the
+ * disk. The latch is source-level only; `readSync` keeps delegating to the
+ * `PageCache`, which never sees a `File` and keeps answering for whatever
+ * Pages are already resident, forever, per ADR-0004.
  */
 export class FileByteSource implements ByteSource {
   readonly #file: File
   readonly #cache: PageCache
   readonly #closeRejectors = new Set<() => void>()
   #closed = false
+  #gone = false
 
   constructor(file: File) {
     this.#file = file
@@ -69,6 +84,10 @@ export class FileByteSource implements ByteSource {
     assertReadArgs(offset, length)
     if (this.#closed) {
       throw new ByteSourceError('source-closed')
+    }
+    if (this.#gone) {
+      // Latched: reject immediately without touching the disk again.
+      throw new ByteSourceError('source-gone')
     }
 
     let onClose!: () => void
@@ -97,6 +116,10 @@ export class FileByteSource implements ByteSource {
       if (error instanceof RangeError) {
         throw error
       }
+      if (isSourceGoneError(error)) {
+        this.#gone = true
+        throw new ByteSourceError('source-gone', error.message)
+      }
       throw new ByteSourceError(
         'read-failed',
         error instanceof Error ? error.message : String(error),
@@ -106,7 +129,12 @@ export class FileByteSource implements ByteSource {
     }
   }
 
-  /** Non-null only on a full local hit (ADR-0001). Never blocks. */
+  /**
+   * Non-null only on a full local hit (ADR-0001). Never blocks. Delegates to
+   * the `PageCache` even once `source-gone` has latched: the cache never sees
+   * a `File` and keeps answering for whatever Pages are already resident
+   * (ADR-0004) — only `close` forces this to `null` unconditionally.
+   */
   readSync(offset: number, length: number): Uint8Array | null {
     if (this.#closed) {
       return null
@@ -114,9 +142,9 @@ export class FileByteSource implements ByteSource {
     return this.#cache.readSync(offset, length)
   }
 
-  /** Fire-and-forget, never throws (ADR-0001). No-op once closed. */
+  /** Fire-and-forget, never throws (ADR-0001). No-op once closed or gone. */
   prefetch(offset: number, length: number): void {
-    if (this.#closed) {
+    if (this.#closed || this.#gone) {
       return
     }
     this.#cache.prefetch(offset, length)
