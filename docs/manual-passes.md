@@ -107,36 +107,38 @@ clean pass is the result that keeps the worker deferred.
 
 | Field | Value |
 | --- | --- |
-| Date | |
-| Build (`git rev-parse --short HEAD`) | |
-| Machine (CPU / RAM) | |
-| Browser / OS | |
-| Files used (size, zeroed or real content) | |
+| Date | 2026-09-08 |
+| Build (`git rev-parse --short HEAD`) | 6b61f4b |
+| Machine (CPU / RAM) | i7-1355U / 32 GB |
+| Browser / OS | Edge 152 / Windows 11 |
+| Files used (size, zeroed or real content) | `file1.iso` 573MB real content, `file2.vhd` 592MB real content, `file3.zip` 3.08GB real content |
 
 **≤ 700 MB — fully responsive?**
 
-- Wheel scroll:
-- Held arrow / `PageDown`:
-- Thumb drag:
-- `Ctrl+End` / `Ctrl+Home`:
-- `Ctrl+G`:
-- Bytes-per-row change:
-- Copy of a small range:
-- Frame times flat over a long scroll (y/n), typical / worst ms:
-- Memory plateaus (y/n):
+- Wheel scroll: *yes*
+- Held arrow / `PageDown`: *yes*
+- Thumb drag: *yes*
+- `Ctrl+End` / `Ctrl+Home`: *yes*
+- `Ctrl+G`: *yes* 2ab73xx 2efcbxx
+- Bytes-per-row change: *yes*
+- Copy of a small range: *yes*
+- Frame times flat over a long scroll (y/n), typical / worst ms: *yes, typically 16 / 33, scarce occurrences of 50ms*
+- Memory plateaus (y/n): *yes, heap stays within 2.4-4.1MB*
 
 **~2 GB — no crash?**
 
-- Opened and rendered (y/n):
-- Navigated without hang / OOM (y/n):
-- Closed / replaced cleanly (y/n):
-- Thumb granularity observed (rows per pixel, if estimated):
+- Opened and rendered (y/n): *yes*
+- Navigated without hang / OOM (y/n): *yes*
+- Closed / replaced cleanly (y/n): *yes*
+- Thumb granularity observed (rows per pixel, if estimated): *280000 rows per pixel based on the viewport height and total number of rows for `file3.zip`*
 
 **Deferred-worker trigger:**
 
-- `stats` before scroll:
+- `stats` before scroll: `{ "hits": 0, "misses": 26, "evictions": 0, "pagesResident": 2, "pendingCount": 0, "bytesFetched": 131072}`
 - `stats` after scroll:
-- Paging-attributable long tasks at ~700 MB (list with timestamps, or "none"):
+  - *thumb scroll file3.zip* `{ "hits": 0, "misses": 3120, "evictions": 103, "pagesResident": 256, "pendingCount": 0, "bytesFetched": 23527424 }`
+  - *wheel/page scroll file3.zip* `{ "hits": 4350, "misses": 26, "evictions": 0, "pagesResident": 2, "pendingCount": 0, "bytesFetched": 131072 }`
+- Paging-attributable long tasks at ~700 MB (list with timestamps, or "none"): *none*
 - Verdict: worker stays deferred / evidence to build the worker recorded
 
 **Other findings / follow-ups:**
@@ -199,18 +201,26 @@ labelling around it, not a reading of the dump.
 
 | Field | Value |
 | --- | --- |
-| Date | |
-| Build (`git rev-parse --short HEAD`) | |
-| NVDA version / browser | |
-| macOS / VoiceOver / browser | |
+| Date | 2026-09-08 |
+| Build (`git rev-parse --short HEAD`) | 6b61f4b |
+| NVDA version / browser | 2026.2 / Edge 152 |
+| macOS / VoiceOver / browser | N/A macOS is out of scope |
 
 **NVDA — Journey A (open, name, size):** pass / fail + notes
 
+pass. Works as expected.
+
 **NVDA — Journey B (walk the Cursor):** pass / fail + notes
+
+pass. Works more or less as expected. Falls back to announcing the filename and size after *goto offset*. Nuisance, not a real problem.
 
 **VoiceOver — Journey A:** pass / fail + notes
 
+N/A no macOS testing done
+
 **VoiceOver — Journey B:** pass / fail + notes
+
+N/A no macOS testing done
 
 **Bugs found / follow-ups:**
 
