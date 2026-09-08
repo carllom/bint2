@@ -159,8 +159,8 @@ describe('charFor — akai (S1000/S3000 sampler name codec)', () => {
     [0x25, '#'],
     [0x26, '+'],
     [0x27, '-'],
-    [0x28, '.'],
-    [0x29, '.'], // first byte past the name range — placeholder
+    [0x28, '.'], // a genuine "." glyph — the last mapped code
+    [0x29, '.'], // first byte past the name range — the placeholder, same glyph
     [0x41, '.'], // ASCII 'A' is code 65, well past 40 — placeholder
     [0xff, '.'],
   ])('charFor(%i, akai) === %j', (byte, glyph) => {
