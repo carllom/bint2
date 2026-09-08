@@ -31,14 +31,27 @@ const run = useBytesAt(
   INSPECTOR_READ_LENGTH,
 )
 
+/**
+ * `value` — a real decode; `no-cursor` — no Cursor yet, or a type wider than the
+ * bytes left at EOF; `pending` — the run is not yet resident (plan §3.4). The
+ * glyph and the disabled/enabled state both follow from this, rather than being
+ * inferred by string-comparing the glyph back.
+ */
+type RowState = 'value' | 'no-cursor' | 'pending'
+
 interface RenderedRow {
   readonly key: string
   readonly label: string
   readonly ariaLabel: string
   /** True where the group index changes — a hairline is drawn before it. */
   readonly groupStart: boolean
+  readonly state: RowState
   readonly text: string
-  readonly placeholder: boolean
+}
+
+const GLYPH: Record<Exclude<RowState, 'value'>, string> = {
+  'no-cursor': NO_CURSOR,
+  pending: PENDING,
 }
 
 const rows = computed<RenderedRow[]>(() => {
@@ -46,15 +59,13 @@ const rows = computed<RenderedRow[]>(() => {
   const opts = { byteOrder: preferences.byteOrder, intHex: preferences.intHex }
   let lastGroup = 0
   return INSPECTOR_ROWS.map((row) => {
-    let text: string
-    if (cursorOffset.value === null) {
-      text = NO_CURSOR
+    let state: RowState
+    if (cursorOffset.value === null || (bytes !== null && bytes.length < row.width)) {
+      state = 'no-cursor'
     } else if (bytes === null) {
-      text = PENDING
-    } else if (bytes.length < row.width) {
-      text = NO_CURSOR
+      state = 'pending'
     } else {
-      text = decodeInspectorRow(row, bytes, opts)
+      state = 'value'
     }
     const groupStart = row.group !== lastGroup && lastGroup !== 0
     lastGroup = row.group
@@ -63,8 +74,8 @@ const rows = computed<RenderedRow[]>(() => {
       label: row.key,
       ariaLabel: row.ariaLabel,
       groupStart,
-      text,
-      placeholder: text === NO_CURSOR || text === PENDING,
+      state,
+      text: state === 'value' ? decodeInspectorRow(row, bytes!, opts) : GLYPH[state],
     }
   })
 })
@@ -93,7 +104,7 @@ function toggleHex(): void {
 }
 
 function copyRow(row: RenderedRow): void {
-  if (row.placeholder) {
+  if (row.state !== 'value') {
     return
   }
   void documentStore.copyInspectorValue(row.label, row.text)
@@ -169,8 +180,8 @@ function copyRow(row: RenderedRow): void {
           <button
             type="button"
             class="inspector__value"
-            :class="{ 'inspector__value--placeholder': row.placeholder }"
-            :disabled="row.placeholder"
+            :class="{ 'inspector__value--placeholder': row.state !== 'value' }"
+            :disabled="row.state !== 'value'"
             :aria-label="`Copy the ${row.ariaLabel} value`"
             :data-field="`inspector-${row.key}`"
             @click="copyRow(row)"

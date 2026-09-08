@@ -2025,7 +2025,7 @@ describe('the b hotkey flips the view-wide byte order (#55)', () => {
 
     await area.trigger('keydown', { key: 'b' })
     expect(prefs.byteOrder).toBe('be')
-    expect(store.actionStatus).toEqual({ ok: true, message: 'Byte order: big-endian' })
+    expect(store.actionStatus).toMatchObject({ ok: true, message: 'Byte order: big-endian' })
     expect(app.find('[data-field="action-live-region"]').text()).toBe('Byte order: big-endian')
 
     await area.trigger('keydown', { key: 'b' })

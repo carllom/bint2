@@ -2,9 +2,9 @@
  * Code page 437 — the IBM PC hardware glyph set (#56, plan §5.1).
  *
  * All 256 values carry a glyph; there is no placeholder in this table ever.
- * 0x00-0x1F are the control-pictures the CGA/EGA/VGA text ROM actually drew
- * (☺☻♥♦♪♫ ...), 0x7F is ⌂, and 0x80-0xFF are the
- * accented-Latin / box-drawing / Greek / maths range.
+ * 0x01-0x1F are the control-pictures the CGA/EGA/VGA text ROM actually drew
+ * (☺☻♥♦♪♫ ...); 0x00 is blank, as on the hardware; 0x7F is ⌂; and 0x80-0xFF are
+ * the accented-Latin / box-drawing / Greek / maths range.
  *
  * Source of truth: the Unicode equivalents in the "Code page 437" reference
  * chart (unicode.org CP437.TXT and the Wikipedia table), hand-adjusted so the

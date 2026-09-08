@@ -39,6 +39,13 @@ export const COPY_BYTE_CAP = 8 * 1024 * 1024
 export interface ActionStatus {
   readonly ok: boolean
   readonly message: string
+  /**
+   * A copy message reports on the Selection it was made from, so the
+   * Selection-move watch clears it. A `sticky` message — the byte-order flip
+   * (#55, plan §4.4) — has no such tie to the Selection and stays until the
+   * next action replaces it.
+   */
+  readonly sticky?: boolean
 }
 
 /**
@@ -92,15 +99,14 @@ export const useDocumentStore = defineStore('document', () => {
   const sourceHealth = shallowRef<SourceHealth>('ok')
 
   // A copy message reports on the Selection it was made from; the moment that
-  // Selection moves, the message is stale. The byte-order flip message (#55) is
-  // a plain transient set with no clearing of its own, so it too rides this
-  // watch out on the next Cursor move — which is fine, it is transient anyway
-  // (plan §4.4). (Opening a document is handled in `open`, which nulls the
-  // Selection and the message together.)
+  // Selection moves, the message is stale. A `sticky` message — the byte-order
+  // flip (#55) — has no such tie and rides straight through (plan §4.4).
+  // (Opening a document is handled in `open`, which nulls the Selection and the
+  // message together.)
   watch(
     selection,
     (next, prev) => {
-      if (prev !== null && next !== prev) {
+      if (prev !== null && next !== prev && actionStatus.value?.sticky !== true) {
         actionStatus.value = null
       }
     },
@@ -329,12 +335,14 @@ export const useDocumentStore = defineStore('document', () => {
 
   /**
    * Announce a byte-order flip through the action-status slot (#55, plan §4.3).
-   * A plain transient set — no staleness watch of its own; the Selection-move
-   * watch clears it like any other action message (plan §4.4).
+   * A plain transient set with no staleness watch of its own — `sticky` so the
+   * Selection-move watch does not clear it; it stays until the next action
+   * replaces it (plan §4.4).
    */
   function announceByteOrder(order: 'le' | 'be'): void {
     actionStatus.value = {
       ok: true,
+      sticky: true,
       message: `Byte order: ${order === 'le' ? 'little-endian' : 'big-endian'}`,
     }
   }

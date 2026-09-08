@@ -483,19 +483,25 @@ describe('announceByteOrder — the byte-order flip message (#55, plan §4.3)', 
   it('sets the action-status slot with the spelled-out order', () => {
     const store = useDocumentStore()
     store.announceByteOrder('le')
-    expect(store.actionStatus).toEqual({ ok: true, message: 'Byte order: little-endian' })
+    expect(store.actionStatus).toMatchObject({ ok: true, message: 'Byte order: little-endian' })
     store.announceByteOrder('be')
-    expect(store.actionStatus).toEqual({ ok: true, message: 'Byte order: big-endian' })
+    expect(store.actionStatus).toMatchObject({ ok: true, message: 'Byte order: big-endian' })
   })
 
-  it('rides the Selection-move watch out like any other action message (plan §4.4)', () => {
+  it('is sticky — a Selection move does not clear it, only the next action (plan §4.4)', () => {
     const store = useDocumentStore()
     store.open(sourceOfSize(64), 'a.bin')
     store.setCursor(4)
     store.announceByteOrder('be')
-    expect(store.actionStatus).not.toBeNull()
 
-    store.setCursor(8)
+    store.setCursor(8) // the copy path's clear does not touch a sticky message
+    expect(store.actionStatus?.message).toBe('Byte order: big-endian')
+
+    // The next copy replaces it, and that message *is* cleared on a later move.
+    store.setCursor(12)
+    store.extendSelectionTo(15)
+    store.actionStatus = { ok: true, message: 'Copied 4 bytes to the clipboard as hex.' }
+    store.setCursor(20)
     expect(store.actionStatus).toBeNull()
   })
 })

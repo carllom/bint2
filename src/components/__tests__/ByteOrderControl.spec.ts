@@ -45,7 +45,7 @@ describe('ByteOrderControl (#55, plan §4.1)', () => {
     await control.findAll('input[type=radio]')[1]!.trigger('change') // BE
 
     expect(prefs.byteOrder).toBe('be')
-    expect(store.actionStatus).toEqual({ ok: true, message: 'Byte order: big-endian' })
+    expect(store.actionStatus).toMatchObject({ ok: true, message: 'Byte order: big-endian' })
   })
 
   it('follows the preference when it changes elsewhere (the hotkey)', async () => {

@@ -29,7 +29,7 @@ export {
   toRawText,
   toSignedByte,
 } from './format'
-export type { DecodeOptions, InspectorRow, InspectorRowKind } from './inspector'
+export type { DecodeOptions, InspectorRow } from './inspector'
 export { decodeInspectorRow, INSPECTOR_READ_LENGTH, INSPECTOR_ROWS } from './inspector'
 export type { Selection, SelectionRange } from './selection'
 export { cursorAt, extendTo, isCollapsed, rangeOf } from './selection'

@@ -43,7 +43,7 @@ describe('INSPECTOR_ROWS', () => {
 
   it('has no f16 and no text line', () => {
     expect(INSPECTOR_ROWS.some((r) => r.key === 'f16')).toBe(false)
-    expect(INSPECTOR_ROWS.some((r) => r.kind === ('text' as never))).toBe(false)
+    expect(INSPECTOR_ROWS.some((r) => r.key === 'text' || r.key.startsWith('str'))).toBe(false)
   })
 
   it('every row carries a full aria-label', () => {
