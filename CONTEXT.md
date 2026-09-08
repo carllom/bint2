@@ -74,6 +74,14 @@ width and a byte order; a byte requires neither. Out of scope for phase 1, named
 here so that it never gets called a byte.
 _Avoid_: field, word, value, datum
 
+**Byte order**:
+The order — little- or big-endian — in which a multi-byte Element's bytes are
+read into a number. One view-wide setting, persisted, that every numeric decode
+of the document obeys: the inspector now, the element grid later. It never
+reaches the char column or a raw-byte copy, which render bytes one at a time and
+have no order to choose.
+_Avoid_: endianness (as the setting's name), LE/BE (in prose)
+
 **Panel**:
 A named region of the app shell docked to an edge of the viewport, holding one
 tool. The inspector is the first. A panel occupies one of two slots — a strip
