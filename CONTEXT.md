@@ -74,9 +74,18 @@ width and a byte order; a byte requires neither. Out of scope for phase 1, named
 here so that it never gets called a byte.
 _Avoid_: field, word, value, datum
 
+**Panel**:
+A named region of the app shell docked to an edge of the viewport, holding one
+tool. The inspector is the first. A panel occupies one of two slots — a strip
+along the bottom or a column down the right — at a time, and collapses to a bar.
+_Avoid_: pane, dock, widget
+
 **Inspector**:
-The surface that decodes the bytes at the cursor into every element type at
-once. Distinct from an element grid, which would render the document itself as
-elements rather than bytes; the inspector leaves the document's rendering
-byte-oriented. Out of scope for phase 1.
+The panel that decodes the bytes at the cursor into each primitive numeric type
+at once — the signed and unsigned integers at 8, 16, 32 and 64 bits, and the 32-
+and 64-bit floats — read in the view's current byte order. It shows its values
+on demand as the cursor moves and is never spoken. Distinct from an element
+grid, which would render the document itself as elements rather than bytes; the
+inspector leaves the document's rendering byte-oriented, and leaves glyphs to
+the char column.
 _Avoid_: data panel, decoder, preview
