@@ -79,7 +79,14 @@ serves every project from the shared `carllom.github.io` origin.
   status bar) or a **right-side column**. `dock` preference, default `bottom`.
   The empty slot renders nothing.
 - Bottom strip lays its rows out **horizontally and wraps to multiple rows** on a
-  narrow screen (flex/grid); the right column **stacks rows vertically**.
+  narrow screen (flex/grid), wrapping **one group at a time** — the unsigned and
+  signed rows of a width (`u16`/`i16`, `f32`/`f64`, …) always travel to the next
+  line together, never split. The right column **stacks rows vertically**.
+- The right column is **horizontally resizable**, from a readable minimum
+  (~16ch) up to the width of the byte grid at 32 bytes per row (offset + hex +
+  char column, ~141ch) — past that the panel is wider than the view it inspects.
+  The chosen width is **not persisted** (the drag handle is a within-session
+  convenience; a stored width waits for the preferences page — §10).
 - **Visible whenever a document is open; hidden entirely when none is.**
 - **Collapsible** to a thin bar (label `inspector` + expand chevron, click
   anywhere on the bar to expand); `collapsed` persisted.
