@@ -74,9 +74,40 @@ width and a byte order; a byte requires neither. Out of scope for phase 1, named
 here so that it never gets called a byte.
 _Avoid_: field, word, value, datum
 
+**Byte order**:
+The order — little- or big-endian — in which a multi-byte Element's bytes are
+read into a number. One view-wide setting, persisted, that every numeric decode
+of the document obeys: the inspector now, the element grid later. It never
+reaches the char column or a raw-byte copy, which render bytes one at a time and
+have no order to choose.
+_Avoid_: endianness (as the setting's name), LE/BE (in prose)
+
+**Code page**:
+A 256-entry table mapping each byte value to one glyph, used to render the char
+column. One view-wide setting, persisted, like Byte order — and like Byte order
+it decodes nothing: it never changes how a byte is read as a number, copied, or
+addressed, only which glyph it shows. Bytes a table leaves unmapped fall back to
+one shared placeholder glyph.
+_Avoid_: encoding, charset, character set, character map
+
+**Char column**:
+The column of the byte grid that shows one glyph per byte, beside the hex
+column. Always exactly one glyph per byte — never a decoded multi-byte string —
+and which glyph is the Code page's choice.
+_Avoid_: ASCII pane, char pane, text column
+
+**Panel**:
+A named region of the app shell docked to an edge of the viewport, holding one
+tool. The inspector is the first. A panel occupies one of two slots — a strip
+along the bottom or a column down the right — at a time, and collapses to a bar.
+_Avoid_: pane, dock, widget
+
 **Inspector**:
-The surface that decodes the bytes at the cursor into every element type at
-once. Distinct from an element grid, which would render the document itself as
-elements rather than bytes; the inspector leaves the document's rendering
-byte-oriented. Out of scope for phase 1.
+The panel that decodes the bytes at the cursor into each primitive numeric type
+at once — the signed and unsigned integers at 8, 16, 32 and 64 bits, and the 32-
+and 64-bit floats — read in the view's current byte order. It shows its values
+on demand as the cursor moves and is never spoken. Distinct from an element
+grid, which would render the document itself as elements rather than bytes; the
+inspector leaves the document's rendering byte-oriented, and leaves glyphs to
+the char column.
 _Avoid_: data panel, decoder, preview
