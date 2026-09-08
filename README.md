@@ -28,6 +28,10 @@ your machine and is read through the browser's local File API.
   is uncapped.
 - **Reshape** — the grid is a fixed 8, 16, 24, or 32 bytes per row (default 16).
   Changing the preset preserves the byte offset, not the row.
+- **Byte order** — a toolbar `LE` / `BE` segment, or press `b` with the grid
+  focused, sets one view-wide little- or big-endian order (default little).
+  Every multi-byte number the Inspector decodes obeys it; the char column, the
+  offset column, and the raw-byte copies never do.
 
 The status bar reads out where the cursor is and the byte under it — offset in
 hex and decimal, the byte as u8/i8/binary, and the selection's start, end, and

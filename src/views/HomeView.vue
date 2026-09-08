@@ -4,6 +4,7 @@
 // Panel (#54) docks to the viewport's bottom or right edge; the status bar reads
 // out where the Cursor is (#23); the dead-source banner (#26) surfaces above the
 // viewport when the open document's source latches or repeatedly fails (ADR-0004).
+import ByteOrderControl from '@/components/ByteOrderControl.vue'
 import BytesPerRowControl from '@/components/BytesPerRowControl.vue'
 import DeadSourceBanner from '@/components/DeadSourceBanner.vue'
 import FileDropZone from '@/components/FileDropZone.vue'
@@ -24,6 +25,7 @@ const preferences = usePreferencesStore()
     <header class="app-shell__toolbar" data-region="toolbar">
       <FileDropZone />
       <BytesPerRowControl />
+      <ByteOrderControl />
     </header>
     <!-- Populated only when the open document becomes a dead source (ADR-0004);
          zero-height otherwise, so it is not persistent chrome. -->

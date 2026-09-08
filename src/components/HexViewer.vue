@@ -28,6 +28,7 @@ import GotoBox from '@/components/GotoBox.vue'
 import VirtualScrollbar from '@/components/VirtualScrollbar.vue'
 import { useByteAt } from '@/composables/useByteAt'
 import { useDocumentStore } from '@/stores/document'
+import { usePreferencesStore } from '@/stores/preferences'
 
 // The Viewport (CONTEXT.md): the bounded window of the document on screen. It
 // never depends on a browser layout height — `topByteOffset` in the store is the
@@ -52,6 +53,7 @@ const DEFAULT_VIEWPORT_PX = DEFAULT_ROW_PX * 40
 const CURSOR_ANNOUNCE_DEBOUNCE_MS = 200
 
 const documentStore = useDocumentStore()
+const preferences = usePreferencesStore()
 const gridEl = useTemplateRef<HTMLElement>('grid')
 const rowAreaEl = useTemplateRef<HTMLElement>('rowArea')
 const probeEl = useTemplateRef<HTMLElement>('probe')
@@ -540,6 +542,24 @@ function onKeyDown(event: KeyboardEvent): void {
     return
   }
 
+  // Plain `b` flips the view-wide byte order (#55, plan §4.2) — no modifier, and
+  // only while the grid has focus, so it never fires from the Goto box. No
+  // conflict with the taken chords (arrows / PageUp·Down / Home·End / Ctrl+G /
+  // Ctrl+C / Ctrl+Alt+C / Ctrl+Shift+*).
+  if (
+    event.key === 'b' &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  ) {
+    event.preventDefault()
+    const next = preferences.byteOrder === 'le' ? 'be' : 'le'
+    preferences.setByteOrder(next)
+    documentStore.announceByteOrder(next)
+    return
+  }
+
   if (!CURSOR_KEYS.has(event.key)) {
     return
   }
@@ -679,7 +699,8 @@ onBeforeUnmount(() => {
            aria-hidden (DomHexRenderer) and never focusable. These two elements
            are the entire accessibility surface for the byte grid itself. -->
       <p id="hex-viewer-usage" class="visually-hidden">
-        Arrow keys move the byte cursor. Ctrl+G jumps to an offset. Tab leaves this view.
+        Arrow keys move the byte cursor. Ctrl+G jumps to an offset. Press B to switch byte
+        order. Tab leaves this view.
       </p>
       <div
         class="visually-hidden"

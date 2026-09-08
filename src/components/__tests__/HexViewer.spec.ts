@@ -7,6 +7,7 @@ import { byteSourceFactoryKey } from '@/byteSourceFactory'
 import type { ByteSource } from '@/core'
 import { ByteSourceError, FileByteSource, toAddress } from '@/core'
 import { useDocumentStore } from '@/stores/document'
+import { usePreferencesStore } from '@/stores/preferences'
 import HomeView from '@/views/HomeView.vue'
 
 function fileOf(bytes: number[] | Uint8Array, name = 'test.bin'): File {
@@ -2007,5 +2008,70 @@ describe('Viewport accessibility: role=application and the announced Cursor (#27
     app.find('.hex-viewer__row-area').element.dispatchEvent(event)
 
     expect(event.defaultPrevented).toBe(false)
+  })
+})
+
+// --- Byte order: the `b` hotkey (#55, plan §4.2) --------------------------
+
+describe('the b hotkey flips the view-wide byte order (#55)', () => {
+  it('flips LE ↔ BE while the grid has focus, and announces each flip', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    const prefs = usePreferencesStore(pinia)
+    const store = useDocumentStore(pinia)
+    const area = app.find('.hex-viewer__row-area')
+
+    expect(prefs.byteOrder).toBe('le')
+
+    await area.trigger('keydown', { key: 'b' })
+    expect(prefs.byteOrder).toBe('be')
+    expect(store.actionStatus).toEqual({ ok: true, message: 'Byte order: big-endian' })
+    expect(app.find('[data-field="action-live-region"]').text()).toBe('Byte order: big-endian')
+
+    await area.trigger('keydown', { key: 'b' })
+    expect(prefs.byteOrder).toBe('le')
+    expect(store.actionStatus?.message).toBe('Byte order: little-endian')
+  })
+
+  it('ignores b with a modifier, and capital B', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    const prefs = usePreferencesStore(pinia)
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('keydown', { key: 'b', ctrlKey: true })
+    await area.trigger('keydown', { key: 'b', altKey: true })
+    await area.trigger('keydown', { key: 'B', shiftKey: true })
+    expect(prefs.byteOrder).toBe('le')
+  })
+
+  it('does not fire while the Goto box has focus — never flips mid-typing', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    const prefs = usePreferencesStore(pinia)
+
+    await pressCtrlG()
+    await app.find('#goto-box-input').setValue('0xb')
+    await app.find('#goto-box-input').trigger('keydown', { key: 'b' })
+
+    expect(prefs.byteOrder).toBe('le')
+  })
+
+  it('the byte order persists across a remount', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    await app.find('.hex-viewer__row-area').trigger('keydown', { key: 'b' })
+    expect(usePreferencesStore(pinia).byteOrder).toBe('be')
+    app.unmount()
+
+    setActivePinia((pinia = createPinia()))
+    mountApp()
+    expect(usePreferencesStore(pinia).byteOrder).toBe('be')
+  })
+
+  it('the usage note tells the reader about it', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    expect(app.find('#hex-viewer-usage').text()).toMatch(/press b to switch byte order/i)
   })
 })
