@@ -74,6 +74,28 @@ width and a byte order; a byte requires neither. Out of scope for phase 1, named
 here so that it never gets called a byte.
 _Avoid_: field, word, value, datum
 
+**Byte order**:
+The order — little- or big-endian — in which a multi-byte Element's bytes are
+read into a number. One view-wide setting, persisted, that every numeric decode
+of the document obeys: the inspector now, the element grid later. It never
+reaches the char column or a raw-byte copy, which render bytes one at a time and
+have no order to choose.
+_Avoid_: endianness (as the setting's name), LE/BE (in prose)
+
+**Code page**:
+A 256-entry table mapping each byte value to one glyph, used to render the char
+column. One view-wide setting, persisted, like Byte order — and like Byte order
+it decodes nothing: it never changes how a byte is read as a number, copied, or
+addressed, only which glyph it shows. Bytes a table leaves unmapped fall back to
+one shared placeholder glyph.
+_Avoid_: encoding, charset, character set, character map
+
+**Char column**:
+The column of the byte grid that shows one glyph per byte, beside the hex
+column. Always exactly one glyph per byte — never a decoded multi-byte string —
+and which glyph is the Code page's choice.
+_Avoid_: ASCII pane, char pane, text column
+
 **Panel**:
 A named region of the app shell docked to an edge of the viewport, holding one
 tool. The inspector is the first. A panel occupies one of two slots — a strip
