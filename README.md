@@ -28,12 +28,24 @@ your machine and is read through the browser's local File API.
   is uncapped.
 - **Reshape** — the grid is a fixed 8, 16, 24, or 32 bytes per row (default 16).
   Changing the preset preserves the byte offset, not the row.
+- **Byte order** — a toolbar `LE` / `BE` segment, or press `b` with the grid
+  focused, sets one view-wide little- or big-endian order (default little).
+  Every multi-byte number the Inspector decodes obeys it; the char column, the
+  offset column, and the raw-byte copies never do.
+- **Inspect** — a docked panel decodes the bytes at the cursor into every
+  primitive numeric type at once — `u8 i8 bin` / `u16 i16` / `u32 i32` /
+  `u64 i64` / `f32 f64`. Integers are decimal with a panel-wide `hex` toggle;
+  the panel docks bottom or right and collapses to a bar. Click a value to copy
+  it. It is read on demand, never spoken.
+- **Code page** — a toolbar selector swaps the char column's glyph table:
+  `ASCII` (default), `CP437`, `Windows-1252`, two `PETSCII` sets, and `AKAI`.
+  One glyph per byte, view-wide; it changes only the visible char column and
+  decodes nothing.
 
-The status bar reads out where the cursor is and the byte under it — offset in
-hex and decimal, the byte as u8/i8/binary, and the selection's start, end, and
-length — plus the file name and total size. If the file moves or is truncated
-out from under the open document, a banner says so; bytes already resident stay
-readable, nothing else will be fetched.
+The status bar reads out where the cursor is — offset in hex and decimal, and
+the selection's start, end, and length — plus the file name and total size. If
+the file moves or is truncated out from under the open document, a banner says
+so; bytes already resident stay readable, nothing else will be fetched.
 
 ## What it does not do
 
@@ -47,25 +59,39 @@ hex into a tool that can render them meaningfully. Point interrogation — walk 
 an offset, read the byte there — works with the keyboard and is announced; bulk
 reading goes through copy.
 
+**The char column is single-byte only.** A code page is a 256-entry
+`byte → glyph` table — one glyph per byte, no multi-byte decoding. UTF-8
+sequences, UTF-16, and the legacy CJK encodings are not rendered in the grid;
+raw-text copy still decodes the selection as UTF-8 regardless of the code page.
+
+**The Inspector shows primitive numerics only.** No timestamps, GUIDs, colours,
+or disassembly, and no text line — the char column owns glyph rendering.
+
 ## Accessibility
 
 What is committed and in place, and how it was checked:
 
 - **Keyboard operability** — every action (open, navigate, Goto, select, copy,
-  reshape) is reachable and driveable from the keyboard with no pointer. The
-  keydown handling for each is covered by the unit suite, and a keyboard-only
-  end-to-end journey (open → Goto → arrows → shift-select → copy, never touching
-  the pointer) runs in the Playwright suite.
-- **Honest labelling** — the file button, the bytes-per-row presets, and the
-  Goto box are ordinary labelled controls; the directory-refusal message is an
-  alert; the dead-source banner announces in place without stealing focus. No
-  ARIA claims a capability the grid does not actually have.
+  reshape, byte order) is reachable and driveable from the keyboard with no
+  pointer. The keydown handling for each is covered by the unit suite, and two
+  keyboard-driven end-to-end journeys run in the Playwright suite: the phase-1
+  copy path (open → Goto → arrows → shift-select → copy) and the phase-1.5
+  decode path (move the Cursor → read an Inspector row → press `b` → switch the
+  code page).
+- **Honest labelling** — the file button, the bytes-per-row presets, the
+  byte-order segment, the code-page selector, the Goto box, and the Inspector's
+  header and value controls are all ordinary labelled controls; the
+  directory-refusal message is an alert; the dead-source banner announces in
+  place without stealing focus. No ARIA claims a capability the grid does not
+  actually have.
 - **An announced cursor** — the viewport is a single focusable
   `role="application"` region labelled with the open file's name, and a polite
   live region speaks the cursor as one sentence when it settles
   (*"offset 0x1F40, byte 4D, 'M'"* collapsed; *"selection 0x1F40 to 0x1F4F,
-  16 bytes"* extended). `Ctrl+G` announces its destination the same way. Wheel
-  and scrollbar scrolling stay silent.
+  16 bytes"* extended). `Ctrl+G` announces its destination the same way, and a
+  byte-order flip announces *"Byte order: big-endian"* through the same action
+  region a copy uses. The Inspector updates silently — it is read on demand, not
+  spoken. Wheel and scrollbar scrolling stay silent.
 - **Zoom, OS font scaling, reduced motion, and contrast** are supported — row
   height is measured from a rendered glyph and re-measured on zoom.
 

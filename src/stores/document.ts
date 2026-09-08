@@ -30,10 +30,22 @@ export type BytesPerRow = (typeof BYTES_PER_ROW_PRESETS)[number]
  */
 export const COPY_BYTE_CAP = 8 * 1024 * 1024
 
-/** The outcome of the last copy attempt, hex or raw text — what the action region reads out (#25, #28, #30). */
-export interface CopyStatus {
+/**
+ * The outcome of the last action that feeds the action-status slot (ADR-0005):
+ * a Selection copy — hex or raw text (#25, #30) — an Inspector row-value copy
+ * (#54, plan §3.6), or a byte-order flip (#55, plan §4.3). What the visible
+ * status bar and the action live region (#28) both read.
+ */
+export interface ActionStatus {
   readonly ok: boolean
   readonly message: string
+  /**
+   * A copy message reports on the Selection it was made from, so the
+   * Selection-move watch clears it. A `sticky` message — the byte-order flip
+   * (#55, plan §4.4) — has no such tie to the Selection and stays until the
+   * next action replaces it.
+   */
+  readonly sticky?: boolean
 }
 
 /**
@@ -74,24 +86,28 @@ export const useDocumentStore = defineStore('document', () => {
   // not survive the document being closed.
   const selection = shallowRef<Selection | null>(null)
 
-  // The last copy's success / refusal message. Transient: cleared when the
-  // Selection moves or another document opens, so a stale "Copied …" never
-  // lingers. Held here, not in a component, so the visible status bar and the
-  // accessibility action region (#28) read the one source.
-  const copyStatus = shallowRef<CopyStatus | null>(null)
+  // The last action-status message — a copy's success / refusal, or a
+  // byte-order flip (#55). Transient: the watch below clears it when the
+  // Selection moves, and `open` clears it when another document opens, so a
+  // stale "Copied …" never lingers. Held here, not in a component, so the
+  // visible status bar and the accessibility action region (#28) read the one
+  // source. Renamed from `copyStatus` — two features now feed it (plan §4.4).
+  const actionStatus = shallowRef<ActionStatus | null>(null)
 
   // The dead-source banner's state (#26, ADR-0004). `HexViewer` is what
   // observes the reads that drive this; the store just holds and resets it.
   const sourceHealth = shallowRef<SourceHealth>('ok')
 
   // A copy message reports on the Selection it was made from; the moment that
-  // Selection moves, the message is stale. (Opening a document is handled in
-  // `open`, which nulls the Selection and the message together.)
+  // Selection moves, the message is stale. A `sticky` message — the byte-order
+  // flip (#55) — has no such tie and rides straight through (plan §4.4).
+  // (Opening a document is handled in `open`, which nulls the Selection and the
+  // message together.)
   watch(
     selection,
     (next, prev) => {
-      if (prev !== null && next !== prev) {
-        copyStatus.value = null
+      if (prev !== null && next !== prev && actionStatus.value?.sticky !== true) {
+        actionStatus.value = null
       }
     },
     { flush: 'sync' },
@@ -104,7 +120,7 @@ export const useDocumentStore = defineStore('document', () => {
     fileSize.value = next.size
     topByteOffset.value = 0
     selection.value = null
-    copyStatus.value = null
+    actionStatus.value = null
     sourceHealth.value = 'ok'
   }
 
@@ -228,7 +244,7 @@ export const useDocumentStore = defineStore('document', () => {
     const bytes = end - start
 
     if (bytes > COPY_BYTE_CAP) {
-      copyStatus.value = {
+      actionStatus.value = {
         ok: false,
         message:
           `Selection is ${toByteSizeDetail(bytes)} — ` +
@@ -252,7 +268,7 @@ export const useDocumentStore = defineStore('document', () => {
       }
     }
     if (data === null || data.length < bytes) {
-      copyStatus.value = { ok: false, message: 'Selection could not be read. Nothing was copied.' }
+      actionStatus.value = { ok: false, message: 'Selection could not be read. Nothing was copied.' }
       return
     }
 
@@ -260,14 +276,14 @@ export const useDocumentStore = defineStore('document', () => {
       await writeText(render(data))
     } catch {
       if (!abandoned()) {
-        copyStatus.value = { ok: false, message: 'The clipboard could not be written.' }
+        actionStatus.value = { ok: false, message: 'The clipboard could not be written.' }
       }
       return
     }
     if (abandoned()) {
       return
     }
-    copyStatus.value = {
+    actionStatus.value = {
       ok: true,
       message: `Copied ${bytes.toLocaleString()} bytes to the clipboard as ${kind}.`,
     }
@@ -296,6 +312,42 @@ export const useDocumentStore = defineStore('document', () => {
   }
 
   /**
+   * Copy one Inspector row's currently-displayed value (#54, plan §3.6). The
+   * Panel passes the row's terse label (`u32`) and the exact text it is showing
+   * — already formatted for `hex` and byte order — so this is a plain clipboard
+   * write with no rendering of its own. Confirmation rides the same
+   * {@link actionStatus} slot as a Selection copy; there is no new surface.
+   * `writeText` is injected for testing, defaulting to the platform clipboard.
+   */
+  async function copyInspectorValue(
+    label: string,
+    text: string,
+    writeText: (text: string) => Promise<void> = platformWriteText,
+  ): Promise<void> {
+    try {
+      await writeText(text)
+    } catch {
+      actionStatus.value = { ok: false, message: 'The clipboard could not be written.' }
+      return
+    }
+    actionStatus.value = { ok: true, message: `Copied ${label} value` }
+  }
+
+  /**
+   * Announce a byte-order flip through the action-status slot (#55, plan §4.3).
+   * A plain transient set with no staleness watch of its own — `sticky` so the
+   * Selection-move watch does not clear it; it stays until the next action
+   * replaces it (plan §4.4).
+   */
+  function announceByteOrder(order: 'le' | 'be'): void {
+    actionStatus.value = {
+      ok: true,
+      sticky: true,
+      message: `Byte order: ${order === 'le' ? 'little-endian' : 'big-endian'}`,
+    }
+  }
+
+  /**
    * Reshape the grid to `next` bytes per row (#19, ADR-0006). Only the preset
    * changes here; `topByteOffset` is realigned to the new row width by the
    * Viewport, which funnels the current offset back through {@link
@@ -317,7 +369,7 @@ export const useDocumentStore = defineStore('document', () => {
     topByteOffset,
     bytesPerRow,
     selection,
-    copyStatus,
+    actionStatus,
     sourceHealth,
     open,
     scrollTo,
@@ -327,6 +379,8 @@ export const useDocumentStore = defineStore('document', () => {
     extendSelectionTo,
     copySelectionAsHex,
     copySelectionAsText,
+    copyInspectorValue,
+    announceByteOrder,
     setSourceHealth,
   }
 })

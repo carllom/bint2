@@ -7,6 +7,7 @@ import { byteSourceFactoryKey } from '@/byteSourceFactory'
 import type { ByteSource } from '@/core'
 import { ByteSourceError, FileByteSource, toAddress } from '@/core'
 import { useDocumentStore } from '@/stores/document'
+import { usePreferencesStore } from '@/stores/preferences'
 import HomeView from '@/views/HomeView.vue'
 
 function fileOf(bytes: number[] | Uint8Array, name = 'test.bin'): File {
@@ -1342,7 +1343,7 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('02 03 04 05 06')
-    expect(store.copyStatus).toEqual({
+    expect(store.actionStatus).toEqual({
       ok: true,
       message: 'Copied 5 bytes to the clipboard as hex.',
     })
@@ -1375,7 +1376,7 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   it('refuses a Selection over 8 MiB of source bytes — wording names the cap and the size, nothing is copied', async () => {
@@ -1392,8 +1393,8 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus?.ok).toBe(false)
-    const message = store.copyStatus!.message
+    expect(store.actionStatus?.ok).toBe(false)
+    const message = store.actionStatus!.message
     expect(message).toContain('10.0 MiB') // the Selection's size
     expect(message).toContain((10 * 1024 * 1024).toLocaleString()) // exactly
     expect(message).toContain('8.0 MiB') // the cap
@@ -1452,7 +1453,7 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('00 01 02 03 04 05 06 07')
-    expect(store.copyStatus?.ok).toBe(true)
+    expect(store.actionStatus?.ok).toBe(true)
   })
 })
 
@@ -1481,7 +1482,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopyText(app)
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('hello')
-    expect(store.copyStatus).toEqual({
+    expect(store.actionStatus).toEqual({
       ok: true,
       message: 'Copied 5 bytes to the clipboard as text.',
     })
@@ -1500,7 +1501,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopyText(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   it('refuses past the same 8 MiB cap, with the same refusal shown and spoken', async () => {
@@ -1514,11 +1515,11 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopyText(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus?.ok).toBe(false)
-    expect(store.copyStatus?.message).toContain('8.0 MiB')
-    expect(store.copyStatus?.message).toMatch(/nothing was copied/i)
+    expect(store.actionStatus?.ok).toBe(false)
+    expect(store.actionStatus?.message).toContain('8.0 MiB')
+    expect(store.actionStatus?.message).toMatch(/nothing was copied/i)
     const shown = app.find('[data-field="copy-status"]')
-    expect(shown.text()).toBe(store.copyStatus!.message)
+    expect(shown.text()).toBe(store.actionStatus!.message)
     expect(shown.classes()).toContain('status-bar__copy--refused')
     expect(app.find('[data-field="action-live-region"]').text()).toContain('Nothing was copied.')
   })
@@ -1535,7 +1536,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopy(app) // plain Ctrl+C
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('41 42 43 44')
-    expect(useDocumentStore(pinia).copyStatus?.message).toMatch(/as hex\.$/)
+    expect(useDocumentStore(pinia).actionStatus?.message).toMatch(/as hex\.$/)
   })
 
   it('leaves Ctrl+Shift+C for the browser — it is not a copy chord', async () => {
@@ -1557,7 +1558,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await flushPromises()
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
     expect(event.defaultPrevented).toBe(false) // the browser keeps its binding
   })
 
@@ -1575,7 +1576,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await flushPromises()
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('hi')
-    expect(store.copyStatus?.message).toMatch(/as text\.$/)
+    expect(store.actionStatus?.message).toMatch(/as text\.$/)
   })
 })
 
@@ -2007,5 +2008,70 @@ describe('Viewport accessibility: role=application and the announced Cursor (#27
     app.find('.hex-viewer__row-area').element.dispatchEvent(event)
 
     expect(event.defaultPrevented).toBe(false)
+  })
+})
+
+// --- Byte order: the `b` hotkey (#55, plan §4.2) --------------------------
+
+describe('the b hotkey flips the view-wide byte order (#55)', () => {
+  it('flips LE ↔ BE while the grid has focus, and announces each flip', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    const prefs = usePreferencesStore(pinia)
+    const store = useDocumentStore(pinia)
+    const area = app.find('.hex-viewer__row-area')
+
+    expect(prefs.byteOrder).toBe('le')
+
+    await area.trigger('keydown', { key: 'b' })
+    expect(prefs.byteOrder).toBe('be')
+    expect(store.actionStatus).toMatchObject({ ok: true, message: 'Byte order: big-endian' })
+    expect(app.find('[data-field="action-live-region"]').text()).toBe('Byte order: big-endian')
+
+    await area.trigger('keydown', { key: 'b' })
+    expect(prefs.byteOrder).toBe('le')
+    expect(store.actionStatus?.message).toBe('Byte order: little-endian')
+  })
+
+  it('ignores b with a modifier, and capital B', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    const prefs = usePreferencesStore(pinia)
+    const area = app.find('.hex-viewer__row-area')
+
+    await area.trigger('keydown', { key: 'b', ctrlKey: true })
+    await area.trigger('keydown', { key: 'b', altKey: true })
+    await area.trigger('keydown', { key: 'B', shiftKey: true })
+    expect(prefs.byteOrder).toBe('le')
+  })
+
+  it('does not fire while the Goto box has focus — never flips mid-typing', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    const prefs = usePreferencesStore(pinia)
+
+    await pressCtrlG()
+    await app.find('#goto-box-input').setValue('0xb')
+    await app.find('#goto-box-input').trigger('keydown', { key: 'b' })
+
+    expect(prefs.byteOrder).toBe('le')
+  })
+
+  it('the byte order persists across a remount', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    await app.find('.hex-viewer__row-area').trigger('keydown', { key: 'b' })
+    expect(usePreferencesStore(pinia).byteOrder).toBe('be')
+    app.unmount()
+
+    setActivePinia((pinia = createPinia()))
+    mountApp()
+    expect(usePreferencesStore(pinia).byteOrder).toBe('be')
+  })
+
+  it('the usage note tells the reader about it', async () => {
+    const app = mountApp()
+    await openSynthetic(app, new SyntheticByteSource())
+    expect(app.find('#hex-viewer-usage').text()).toMatch(/press b to switch byte order/i)
   })
 })

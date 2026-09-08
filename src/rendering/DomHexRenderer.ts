@@ -1,4 +1,4 @@
-import { toAddress, toAsciiChar, toHex } from '@/core'
+import { charFor, toAddress, toHex } from '@/core'
 import type { HexGridView, HexRowRenderer, HexRowView } from './HexRowRenderer'
 
 interface PooledRow {
@@ -106,7 +106,7 @@ export class DomHexRenderer implements HexRowRenderer {
         const absOffset = data.offset + column
         const byte = bytes[column]!
         hexCell.textContent = toHex(byte, 2)
-        asciiCell.textContent = toAsciiChar(byte)
+        asciiCell.textContent = charFor(byte, view.codePage)
         const offset = String(absOffset)
         hexCell.dataset.offset = offset
         asciiCell.dataset.offset = offset

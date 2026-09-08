@@ -11,6 +11,8 @@
 
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
+export type { CodePage } from './codepages'
+export { charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'
 export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export {
@@ -27,6 +29,8 @@ export {
   toRawText,
   toSignedByte,
 } from './format'
+export type { DecodeOptions, InspectorRow } from './inspector'
+export { decodeInspectorRow, INSPECTOR_READ_LENGTH, INSPECTOR_ROWS } from './inspector'
 export type { Selection, SelectionRange } from './selection'
 export { cursorAt, extendTo, isCollapsed, rangeOf } from './selection'
 export type { ThumbGeometry, ViewportMetrics } from './viewport'

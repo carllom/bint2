@@ -11,6 +11,8 @@
  * sanctioned in advance (ADR-0003).
  */
 
+import type { CodePage } from '@/core'
+
 /** One grid row. `bytes` is `null` until its read resolves. */
 export interface HexRowView {
   readonly offset: number
@@ -38,6 +40,12 @@ export interface HexGridView {
   readonly rows: readonly HexRowView[]
   readonly bytesPerRow: number
   readonly addressWidth: number
+  /**
+   * The char column's code page (#56, plan §5) — which glyph each byte paints
+   * as. Read straight off the `view` object, the same route `byteOrder` takes
+   * to a decoder; it never touches the hex column, the offset column, or a copy.
+   */
+  readonly codePage: CodePage
   /** The one Selection, or `null` before the reader has pointed at a byte. */
   readonly selection: SelectionView | null
   /**
