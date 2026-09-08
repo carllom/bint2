@@ -72,20 +72,26 @@ or disassembly, and no text line — the char column owns glyph rendering.
 What is committed and in place, and how it was checked:
 
 - **Keyboard operability** — every action (open, navigate, Goto, select, copy,
-  reshape) is reachable and driveable from the keyboard with no pointer. The
-  keydown handling for each is covered by the unit suite, and a keyboard-only
-  end-to-end journey (open → Goto → arrows → shift-select → copy, never touching
-  the pointer) runs in the Playwright suite.
-- **Honest labelling** — the file button, the bytes-per-row presets, and the
-  Goto box are ordinary labelled controls; the directory-refusal message is an
-  alert; the dead-source banner announces in place without stealing focus. No
-  ARIA claims a capability the grid does not actually have.
+  reshape, byte order) is reachable and driveable from the keyboard with no
+  pointer. The keydown handling for each is covered by the unit suite, and two
+  keyboard-driven end-to-end journeys run in the Playwright suite: the phase-1
+  copy path (open → Goto → arrows → shift-select → copy) and the phase-1.5
+  decode path (move the Cursor → read an Inspector row → press `b` → switch the
+  code page).
+- **Honest labelling** — the file button, the bytes-per-row presets, the
+  byte-order segment, the code-page selector, the Goto box, and the Inspector's
+  header and value controls are all ordinary labelled controls; the
+  directory-refusal message is an alert; the dead-source banner announces in
+  place without stealing focus. No ARIA claims a capability the grid does not
+  actually have.
 - **An announced cursor** — the viewport is a single focusable
   `role="application"` region labelled with the open file's name, and a polite
   live region speaks the cursor as one sentence when it settles
   (*"offset 0x1F40, byte 4D, 'M'"* collapsed; *"selection 0x1F40 to 0x1F4F,
-  16 bytes"* extended). `Ctrl+G` announces its destination the same way. Wheel
-  and scrollbar scrolling stay silent.
+  16 bytes"* extended). `Ctrl+G` announces its destination the same way, and a
+  byte-order flip announces *"Byte order: big-endian"* through the same action
+  region a copy uses. The Inspector updates silently — it is read on demand, not
+  spoken. Wheel and scrollbar scrolling stay silent.
 - **Zoom, OS font scaling, reduced motion, and contrast** are supported — row
   height is measured from a rendered glyph and re-measured on zoom.
 
