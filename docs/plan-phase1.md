@@ -190,16 +190,19 @@ it later without touching the data layer.
 - `toAddress(offset, width = 8)` — hex, widens to 10/12 as the file needs (room
   for > 4 GB).
 - `toAsciiChar(byte)` — `0x20–0x7E` verbatim, else `.`.
-- **Multi-byte Element view** (u16/u32/i*/f*, endianness) is **phase 1.5**. The
-  seam is **not** owed in `viewport.ts` — an element grid changes only how a
-  row's bytes are painted, `bytesPerRow` stays a byte count, and the viewport
-  surface is frozen regardless
-  ([ADR-0002](adr/0002-page-cache-sized-against-the-viewport.md) amendment). What
-  phase 1 owes 1.5: the **constraint** that elements are anchored at file offset
-  0 and every preset is a multiple of 8, plus the two test-pinned rules above
-  (renderer iterates `bytes`; `toHex` does not mask). No over-read now — under
-  the constraint it is dead weight, and a wider span straddles a Page more often
-  so `readSync` misses more and paints more `··`.
+- **Multi-byte Element view** (u16/u32/i*/f*, byte order) and **alternate char
+  code pages** are **phase 1.5** — specified in
+  [`plan-phase1.5.md`](plan-phase1.5.md), not here. What phase 1 owes 1.5, and
+  only that:
+  - The seam is **not** owed in `viewport.ts` — an element grid changes only how
+    a row's bytes are painted, `bytesPerRow` stays a byte count, and the
+    viewport surface is frozen regardless
+    ([ADR-0002](adr/0002-page-cache-sized-against-the-viewport.md) amendment).
+  - The **constraint** that elements are anchored at file offset 0 and every
+    preset is a multiple of 8, plus the two test-pinned rules above (renderer
+    iterates `bytes`; `toHex` does not mask).
+  - No over-read now — under the constraint it is dead weight, and a wider span
+    straddles a Page more often so `readSync` misses more and paints more `··`.
 
 ## 6. File open
 
