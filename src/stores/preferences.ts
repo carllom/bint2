@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { CODE_PAGES } from '@/core'
+import type { CodePage } from '@/core'
 
 /**
  * The shared phase-1.5 seam (plan §2): a Pinia store persisting one JSON object
@@ -21,20 +23,12 @@ export type Dock = 'bottom' | 'right'
 /** The view-wide byte order every multi-byte numeric decode obeys (#55, ADR-0007). */
 export type ByteOrder = 'le' | 'be'
 
-/**
- * The six code pages that ship (#56, plan §5.1). String literals rather than an
- * enum so the stored JSON and a bug report read plainly. `ascii` first — the
- * default and the familiar one — the two PETSCII rows adjacent.
- */
-export const CODE_PAGES = [
-  'ascii',
-  'cp437',
-  'windows-1252',
-  'petscii',
-  'petscii-lower',
-  'akai',
-] as const
-export type CodePage = (typeof CODE_PAGES)[number]
+// The six code pages that ship (#56, plan §5.1) — string literals rather than
+// an enum so the stored JSON and a bug report read plainly. The list and the
+// `CodePage` type are owned by `src/core` (the tables live there); the store
+// only persists which one is selected.
+export { CODE_PAGES }
+export type { CodePage }
 
 /** The full persisted shape — one JSON object under {@link PREFERENCES_STORAGE_KEY}. */
 export interface Preferences {

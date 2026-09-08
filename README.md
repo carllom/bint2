@@ -32,12 +32,20 @@ your machine and is read through the browser's local File API.
   focused, sets one view-wide little- or big-endian order (default little).
   Every multi-byte number the Inspector decodes obeys it; the char column, the
   offset column, and the raw-byte copies never do.
+- **Inspect** — a docked panel decodes the bytes at the cursor into every
+  primitive numeric type at once — `u8 i8 bin` / `u16 i16` / `u32 i32` /
+  `u64 i64` / `f32 f64`. Integers are decimal with a panel-wide `hex` toggle;
+  the panel docks bottom or right and collapses to a bar. Click a value to copy
+  it. It is read on demand, never spoken.
+- **Code page** — a toolbar selector swaps the char column's glyph table:
+  `ASCII` (default), `CP437`, `Windows-1252`, two `PETSCII` sets, and `AKAI`.
+  One glyph per byte, view-wide; it changes only the visible char column and
+  decodes nothing.
 
-The status bar reads out where the cursor is and the byte under it — offset in
-hex and decimal, the byte as u8/i8/binary, and the selection's start, end, and
-length — plus the file name and total size. If the file moves or is truncated
-out from under the open document, a banner says so; bytes already resident stay
-readable, nothing else will be fetched.
+The status bar reads out where the cursor is — offset in hex and decimal, and
+the selection's start, end, and length — plus the file name and total size. If
+the file moves or is truncated out from under the open document, a banner says
+so; bytes already resident stay readable, nothing else will be fetched.
 
 ## What it does not do
 
@@ -50,6 +58,14 @@ scroll. The grid is therefore hidden from assistive technology on purpose.
 hex into a tool that can render them meaningfully. Point interrogation — walk to
 an offset, read the byte there — works with the keyboard and is announced; bulk
 reading goes through copy.
+
+**The char column is single-byte only.** A code page is a 256-entry
+`byte → glyph` table — one glyph per byte, no multi-byte decoding. UTF-8
+sequences, UTF-16, and the legacy CJK encodings are not rendered in the grid;
+raw-text copy still decodes the selection as UTF-8 regardless of the code page.
+
+**The Inspector shows primitive numerics only.** No timestamps, GUIDs, colours,
+or disassembly, and no text line — the char column owns glyph rendering.
 
 ## Accessibility
 

@@ -112,6 +112,7 @@ function paint(): void {
     rows,
     bytesPerRow: documentStore.bytesPerRow,
     addressWidth,
+    codePage: preferences.codePage,
     selection: selectionView(),
     hoveredByte: hoveredByte.value,
   })
@@ -655,6 +656,7 @@ onMounted(() => {
     },
   )
   watch(hoveredByte, schedulePaint) // repaint as the hover mark moves (#30)
+  watch(() => preferences.codePage, schedulePaint) // repaint the char column on a code-page change (#56)
   watch(metrics, (m) => {
     // A grown viewport or a shorter row (zoom-out) lowers maxFirstRow — pull a
     // near-EOF top back through the choke point before repainting.

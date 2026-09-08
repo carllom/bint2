@@ -6,14 +6,18 @@ function textsOf(root: ParentNode, selector: string): (string | null)[] {
   return [...root.querySelectorAll(selector)].map((node) => node.textContent)
 }
 
-/** A grid view with `selection: null` and `hoveredByte: null` unless overridden. */
+/**
+ * A grid view with `selection: null`, `hoveredByte: null` and `codePage:
+ * 'ascii'` unless overridden.
+ */
 function view(
-  partial: Omit<HexGridView, 'selection' | 'hoveredByte'> & {
+  partial: Omit<HexGridView, 'selection' | 'hoveredByte' | 'codePage'> & {
     selection?: SelectionView | null
     hoveredByte?: number | null
+    codePage?: HexGridView['codePage']
   },
 ): HexGridView {
-  return { selection: null, hoveredByte: null, ...partial }
+  return { selection: null, hoveredByte: null, codePage: 'ascii', ...partial }
 }
 
 describe('DomHexRenderer', () => {

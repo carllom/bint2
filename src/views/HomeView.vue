@@ -6,6 +6,7 @@
 // viewport when the open document's source latches or repeatedly fails (ADR-0004).
 import ByteOrderControl from '@/components/ByteOrderControl.vue'
 import BytesPerRowControl from '@/components/BytesPerRowControl.vue'
+import CodePageControl from '@/components/CodePageControl.vue'
 import DeadSourceBanner from '@/components/DeadSourceBanner.vue'
 import FileDropZone from '@/components/FileDropZone.vue'
 import HexViewer from '@/components/HexViewer.vue'
@@ -26,6 +27,7 @@ const preferences = usePreferencesStore()
       <FileDropZone />
       <BytesPerRowControl />
       <ByteOrderControl />
+      <CodePageControl />
     </header>
     <!-- Populated only when the open document becomes a dead source (ADR-0004);
          zero-height otherwise, so it is not persistent chrome. -->
