@@ -138,3 +138,12 @@ rest of it: M5 is a public ship, and an undocumented non-goal is
 indistinguishable from an oversight. The README states **what was verified and
 with what** — "verified with NVDA and VoiceOver" is a fact; "accessible" is a
 marketing claim.
+
+## Amendment — VoiceOver out of scope (2026-09-08)
+
+The M8 manual pass shipped as **NVDA (Windows) only**. No Apple hardware is
+available to the project, so the VoiceOver leg was not run, and Safari / WebKit
+is best-effort and untested for the same reason (README "Browser support"). The
+"verified with what" principle above is unchanged — the README claims NVDA and
+nothing more. If an Apple device becomes available, the VoiceOver leg is
+restored from git history (`docs/manual-passes.md` Pass 2).

@@ -69,11 +69,11 @@ What is committed and in place, and how it was checked:
 - **Zoom, OS font scaling, reduced motion, and contrast** are supported — row
   height is measured from a rendered glyph and re-measured on zoom.
 
-A manual NVDA (Windows) and VoiceOver (macOS) pass is the remaining hardening
-step and has not been run yet — its two journeys (open a file and hear its name
-and size; walk the Cursor and hear the offset and byte) and a results template
-are in [`docs/manual-passes.md`](./docs/manual-passes.md). This section states
-what is verified today, not a finished audit.
+A manual **NVDA (Windows)** pass was run on 2026-09-08 (build `6b61f4b`): both
+journeys — open a file and hear its name and size, walk the Cursor and hear the
+offset and byte — pass. The **VoiceOver (macOS)** leg is out of scope; no Apple
+hardware is available to the project. Full results are in
+[`docs/manual-passes.md`](./docs/manual-passes.md).
 
 **WCAG 1.4.10 (reflow) at 400% is not met for the grid.** Bytes per row is a
 fixed set of presets, not a width-responsive layout, so at high browser zoom a
@@ -84,9 +84,10 @@ the grid reflows normally.
 ## Browser support
 
 - **First-class** — current desktop Chrome, Edge, and Firefox.
-- **Best-effort** — desktop Safari. It should work; the Playwright config
-  carries a WebKit project, but CI runs Chromium only and a WebKit-only failure
-  is not release-blocking.
+- **Best-effort, untested** — desktop Safari. It should work and the Playwright
+  config carries a WebKit project, but CI runs Chromium only, no Apple hardware
+  is available to test real Safari, and a WebKit-only failure is not
+  release-blocking.
 - **Unsupported** — mobile browsers and touch input. The interaction model is
   keyboard, wheel, and a fine-grained scrollbar.
 - There is no explicit minimum browser version; the floor is whatever the build
@@ -111,11 +112,13 @@ document size, so a 2 GB file opens as fast as a 2 KB one.
 
 The bands are checked by a manual pass on real large files, not by the automated
 suite: the synthetic `size = 2e9` tests prove the coordinate math and that
-nothing allocates the whole document, but they cannot measure frame times. See
-[`docs/manual-passes.md`](./docs/manual-passes.md), which also records whether
-that pass found main-thread work attributable to paging — the evidence that
-would trigger building the deferred worker
-([ADR-0001](./docs/adr/0001-bytesource-boundary-and-deferred-worker.md)).
+nothing allocates the whole document, but they cannot measure frame times. That
+pass was run on 2026-09-08 (build `6b61f4b`) against real files up to ~3 GB:
+frame times stayed flat (~16 ms typical), the heap plateaued, and **no
+main-thread work attributable to paging** was found — so the deferred worker
+stays deferred
+([ADR-0001](./docs/adr/0001-bytesource-boundary-and-deferred-worker.md)). Full
+results are in [`docs/manual-passes.md`](./docs/manual-passes.md).
 
 ## Development
 
