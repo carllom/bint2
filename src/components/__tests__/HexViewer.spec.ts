@@ -1342,7 +1342,7 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('02 03 04 05 06')
-    expect(store.copyStatus).toEqual({
+    expect(store.actionStatus).toEqual({
       ok: true,
       message: 'Copied 5 bytes to the clipboard as hex.',
     })
@@ -1375,7 +1375,7 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   it('refuses a Selection over 8 MiB of source bytes — wording names the cap and the size, nothing is copied', async () => {
@@ -1392,8 +1392,8 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus?.ok).toBe(false)
-    const message = store.copyStatus!.message
+    expect(store.actionStatus?.ok).toBe(false)
+    const message = store.actionStatus!.message
     expect(message).toContain('10.0 MiB') // the Selection's size
     expect(message).toContain((10 * 1024 * 1024).toLocaleString()) // exactly
     expect(message).toContain('8.0 MiB') // the cap
@@ -1452,7 +1452,7 @@ describe('Copy the Selection as hex, refusing past 8 MiB (#25)', () => {
     await pressCopy(app)
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('00 01 02 03 04 05 06 07')
-    expect(store.copyStatus?.ok).toBe(true)
+    expect(store.actionStatus?.ok).toBe(true)
   })
 })
 
@@ -1481,7 +1481,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopyText(app)
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('hello')
-    expect(store.copyStatus).toEqual({
+    expect(store.actionStatus).toEqual({
       ok: true,
       message: 'Copied 5 bytes to the clipboard as text.',
     })
@@ -1500,7 +1500,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopyText(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   it('refuses past the same 8 MiB cap, with the same refusal shown and spoken', async () => {
@@ -1514,11 +1514,11 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopyText(app)
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus?.ok).toBe(false)
-    expect(store.copyStatus?.message).toContain('8.0 MiB')
-    expect(store.copyStatus?.message).toMatch(/nothing was copied/i)
+    expect(store.actionStatus?.ok).toBe(false)
+    expect(store.actionStatus?.message).toContain('8.0 MiB')
+    expect(store.actionStatus?.message).toMatch(/nothing was copied/i)
     const shown = app.find('[data-field="copy-status"]')
-    expect(shown.text()).toBe(store.copyStatus!.message)
+    expect(shown.text()).toBe(store.actionStatus!.message)
     expect(shown.classes()).toContain('status-bar__copy--refused')
     expect(app.find('[data-field="action-live-region"]').text()).toContain('Nothing was copied.')
   })
@@ -1535,7 +1535,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await pressCopy(app) // plain Ctrl+C
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('41 42 43 44')
-    expect(useDocumentStore(pinia).copyStatus?.message).toMatch(/as hex\.$/)
+    expect(useDocumentStore(pinia).actionStatus?.message).toMatch(/as hex\.$/)
   })
 
   it('leaves Ctrl+Shift+C for the browser — it is not a copy chord', async () => {
@@ -1557,7 +1557,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await flushPromises()
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
     expect(event.defaultPrevented).toBe(false) // the browser keeps its binding
   })
 
@@ -1575,7 +1575,7 @@ describe('Copy the Selection as raw text on Ctrl+Alt+C (#30)', () => {
     await flushPromises()
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith('hi')
-    expect(store.copyStatus?.message).toMatch(/as text\.$/)
+    expect(store.actionStatus?.message).toMatch(/as text\.$/)
   })
 })
 

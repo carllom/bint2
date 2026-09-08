@@ -1,3 +1,5 @@
+import { beforeEach } from 'vitest'
+
 // Node 26 ships an experimental global `localStorage` that is inert unless the
 // process is started with `--localstorage-file`, and it is non-configurable
 // enough that vitest's happy-dom environment cannot shadow it — a bare
@@ -42,4 +44,14 @@ Object.defineProperty(globalThis, 'localStorage', {
   value: new MemoryStorage(),
   configurable: true,
   writable: true,
+})
+
+// The one MemoryStorage lives for the whole test file; clear it between cases so
+// persisted `preferences` never leak from one test into the next.
+beforeEach(() => {
+  try {
+    localStorage.clear()
+  } catch {
+    // A test may have stubbed `clear` to throw — its own concern, not ours.
+  }
 })

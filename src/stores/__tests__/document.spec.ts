@@ -195,7 +195,7 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     })
 
     expect(written).toEqual(['04 05 06 07'])
-    expect(store.copyStatus).toEqual({
+    expect(store.actionStatus).toEqual({
       ok: true,
       message: 'Copied 4 bytes to the clipboard as hex.',
     })
@@ -225,11 +225,11 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     })
 
     expect(written).toEqual([]) // nothing reached the clipboard
-    expect(store.copyStatus?.ok).toBe(false)
-    expect(store.copyStatus?.message).toContain('8.0 MiB') // the cap
-    expect(store.copyStatus?.message).toContain('8.5 MiB') // the Selection's size, human-readable
-    expect(store.copyStatus?.message).toContain(bytes.toLocaleString()) // and exact
-    expect(store.copyStatus?.message).toMatch(/nothing was copied/i)
+    expect(store.actionStatus?.ok).toBe(false)
+    expect(store.actionStatus?.message).toContain('8.0 MiB') // the cap
+    expect(store.actionStatus?.message).toContain('8.5 MiB') // the Selection's size, human-readable
+    expect(store.actionStatus?.message).toContain(bytes.toLocaleString()) // and exact
+    expect(store.actionStatus?.message).toMatch(/nothing was copied/i)
   })
 
   it('marking a region past the cap is never itself blocked — only the copy is', () => {
@@ -252,7 +252,7 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     })
 
     expect(written).toEqual(['00 01 02 03'])
-    expect(store.copyStatus?.ok).toBe(true)
+    expect(store.actionStatus?.ok).toBe(true)
   })
 
   it('reports a read failure rather than copying a short or empty result', async () => {
@@ -267,8 +267,8 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     })
 
     expect(written).toEqual([])
-    expect(store.copyStatus?.ok).toBe(false)
-    expect(store.copyStatus?.message).toMatch(/could not be read/i)
+    expect(store.actionStatus?.ok).toBe(false)
+    expect(store.actionStatus?.message).toMatch(/could not be read/i)
   })
 
   it('does nothing with no source or no Selection', async () => {
@@ -280,7 +280,7 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     await store.copySelectionAsHex(writeText) // source, but no Selection
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   it('clears the message when the Selection next moves', async () => {
@@ -288,10 +288,10 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     store.open(new RecordingSource(1024), 'x.bin')
     selectRange(store, 0, 3)
     await store.copySelectionAsHex(() => Promise.resolve())
-    expect(store.copyStatus).not.toBeNull()
+    expect(store.actionStatus).not.toBeNull()
 
     store.setCursor(10)
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   it('clears the message when another document opens', async () => {
@@ -299,10 +299,10 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     store.open(new RecordingSource(1024), 'x.bin')
     selectRange(store, 0, 3)
     await store.copySelectionAsHex(() => Promise.resolve())
-    expect(store.copyStatus).not.toBeNull()
+    expect(store.actionStatus).not.toBeNull()
 
     store.open(new RecordingSource(1024), 'y.bin')
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   /** A source whose `read` stays pending until the test resolves it. */
@@ -343,7 +343,7 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     await done
 
     expect(written).toEqual([]) // nothing copied for the abandoned range
-    expect(store.copyStatus).toBeNull() // and no stale message
+    expect(store.actionStatus).toBeNull() // and no stale message
   })
 
   it('drops a copy whose read resolves after another document opened', async () => {
@@ -363,7 +363,7 @@ describe('copySelectionAsHex — the Selection out of the app as hex (#25)', () 
     await done
 
     expect(written).toEqual([])
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 })
 
@@ -398,7 +398,7 @@ describe('copySelectionAsText — the Selection out of the app as raw text (#30)
     })
 
     expect(written).toEqual(['café'])
-    expect(store.copyStatus).toEqual({
+    expect(store.actionStatus).toEqual({
       ok: true,
       message: 'Copied 5 bytes to the clipboard as text.',
     })
@@ -417,10 +417,10 @@ describe('copySelectionAsText — the Selection out of the app as raw text (#30)
     })
 
     expect(written).toEqual([])
-    expect(store.copyStatus?.ok).toBe(false)
-    expect(store.copyStatus?.message).toContain('8.0 MiB') // the cap
-    expect(store.copyStatus?.message).toContain('8.5 MiB') // the Selection's size
-    expect(store.copyStatus?.message).toMatch(/nothing was copied/i)
+    expect(store.actionStatus?.ok).toBe(false)
+    expect(store.actionStatus?.message).toContain('8.0 MiB') // the cap
+    expect(store.actionStatus?.message).toContain('8.5 MiB') // the Selection's size
+    expect(store.actionStatus?.message).toMatch(/nothing was copied/i)
   })
 
   it('does nothing with no source or no Selection', async () => {
@@ -432,7 +432,7 @@ describe('copySelectionAsText — the Selection out of the app as raw text (#30)
     await store.copySelectionAsText(writeText) // source, but no Selection
 
     expect(writeText).not.toHaveBeenCalled()
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
   })
 
   it('clears the message when the Selection next moves, same as the hex copy', async () => {
@@ -440,10 +440,63 @@ describe('copySelectionAsText — the Selection out of the app as raw text (#30)
     store.open(sourceOfBytes([0x41, 0x42, 0x43, 0x44]), 'x.bin')
     selectRange(store, 0, 3)
     await store.copySelectionAsText(() => Promise.resolve())
-    expect(store.copyStatus).not.toBeNull()
+    expect(store.actionStatus).not.toBeNull()
 
     store.setCursor(2)
-    expect(store.copyStatus).toBeNull()
+    expect(store.actionStatus).toBeNull()
+  })
+})
+
+describe('copyInspectorValue — an Inspector row-value copy (#54, plan §3.6)', () => {
+  it('writes the given text verbatim and reports success naming the row', async () => {
+    const store = useDocumentStore()
+    const written: string[] = []
+    await store.copyInspectorValue('u32', '50462976', (text) => {
+      written.push(text)
+      return Promise.resolve()
+    })
+
+    expect(written).toEqual(['50462976'])
+    expect(store.actionStatus).toEqual({ ok: true, message: 'Copied u32 value' })
+  })
+
+  it('does no rendering of its own — the Panel already formatted for hex / byte order', async () => {
+    const store = useDocumentStore()
+    const written: string[] = []
+    await store.copyInspectorValue('i16', '0100', (text) => {
+      written.push(text)
+      return Promise.resolve()
+    })
+    expect(written).toEqual(['0100'])
+  })
+
+  it('reports a clipboard failure and writes no success message', async () => {
+    const store = useDocumentStore()
+    await store.copyInspectorValue('f64', '1', () => Promise.reject(new Error('denied')))
+
+    expect(store.actionStatus?.ok).toBe(false)
+    expect(store.actionStatus?.message).toMatch(/clipboard could not be written/i)
+  })
+})
+
+describe('announceByteOrder — the byte-order flip message (#55, plan §4.3)', () => {
+  it('sets the action-status slot with the spelled-out order', () => {
+    const store = useDocumentStore()
+    store.announceByteOrder('le')
+    expect(store.actionStatus).toEqual({ ok: true, message: 'Byte order: little-endian' })
+    store.announceByteOrder('be')
+    expect(store.actionStatus).toEqual({ ok: true, message: 'Byte order: big-endian' })
+  })
+
+  it('rides the Selection-move watch out like any other action message (plan §4.4)', () => {
+    const store = useDocumentStore()
+    store.open(sourceOfSize(64), 'a.bin')
+    store.setCursor(4)
+    store.announceByteOrder('be')
+    expect(store.actionStatus).not.toBeNull()
+
+    store.setCursor(8)
+    expect(store.actionStatus).toBeNull()
   })
 })
 

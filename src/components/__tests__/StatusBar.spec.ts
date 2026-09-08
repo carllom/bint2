@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { FileByteSource, toByteSize } from '@/core'
-import type { ByteSource } from '@/core'
 import { useDocumentStore } from '@/stores/document'
 import HomeView from '@/views/HomeView.vue'
 
@@ -93,26 +92,18 @@ describe('the status bar (#23)', () => {
     expect(offset).toContain('31')
   })
 
-  it('shows the byte under the Cursor as unsigned, signed and binary', async () => {
+  it('no longer carries the u8 / i8 / bin group — it moved to the Inspector (plan §3.8)', async () => {
     const app = mountApp()
-    const bytes = Array.from({ length: 16 }, () => 0)
-    bytes[3] = 0x4d
-    bytes[5] = 0x80
-    await openBytes(bytes)
-    const store = useDocumentStore(pinia)
-
-    store.setCursor(3)
+    await openBytes(Array.from({ length: 16 }, (_u, i) => i))
+    useDocumentStore(pinia).setCursor(3)
     await flushPromises()
-    expect(field(app, 'byte-unsigned')).toBe('77')
-    expect(field(app, 'byte-signed')).toBe('77')
-    expect(field(app, 'byte-binary')).toBe('01001101')
 
-    // 0x80: unsigned 128, signed -128, all-or-nothing top bit.
-    store.setCursor(5)
-    await flushPromises()
-    expect(field(app, 'byte-unsigned')).toBe('128')
-    expect(field(app, 'byte-signed')).toBe('-128')
-    expect(field(app, 'byte-binary')).toBe('10000000')
+    expect(field(app, 'byte-unsigned')).toBeNull()
+    expect(field(app, 'byte-signed')).toBeNull()
+    expect(field(app, 'byte-binary')).toBeNull()
+    // The Cursor offset and the document identity stay put.
+    expect(field(app, 'cursor-offset')).toContain('0x03')
+    expect(field(app, 'file-name')).toBe('test.bin')
   })
 
   it('shows Selection start, end and length exactly when the Selection spans bytes', async () => {
@@ -133,8 +124,6 @@ describe('the status bar (#23)', () => {
     expect(field(app, 'selection-start')).toBe('0x04')
     expect(field(app, 'selection-end')).toBe('0x0A')
     expect(field(app, 'selection-length')).toBe('6 B')
-    // The byte fields track the focus end of the range.
-    expect(field(app, 'byte-unsigned')).toBe('9')
   })
 
   it('drops the Selection fields again when the range collapses back to a Cursor', async () => {
@@ -168,36 +157,6 @@ describe('the status bar (#23)', () => {
     expect(field(app, 'byte-unsigned')).toBeNull()
   })
 
-  it('placeholders the byte fields until the point read resolves, then fills them in', async () => {
-    // A source whose bytes are never a synchronous cache hit — `readSync` always
-    // misses, so the status bar must fall back to the async point read.
-    let resolveRead: (() => void) | null = null
-    const source: ByteSource = {
-      size: 64,
-      read: (_offset, length) =>
-        new Promise((resolve) => {
-          resolveRead = () => resolve(new Uint8Array(length).fill(0xff))
-        }),
-      readSync: () => null,
-      prefetch: () => {},
-      close: () => {},
-    }
-    const app = mountApp()
-    useDocumentStore(pinia).open(source, 'deferred.bin')
-    await flushPromises()
-
-    useDocumentStore(pinia).setCursor(10)
-    await flushPromises()
-    expect(field(app, 'byte-unsigned')).toBe('··')
-    expect(field(app, 'byte-binary')).toBe('········')
-
-    resolveRead!()
-    await flushPromises()
-    expect(field(app, 'byte-unsigned')).toBe('255')
-    expect(field(app, 'byte-signed')).toBe('-1')
-    expect(field(app, 'byte-binary')).toBe('11111111')
-  })
-
   it('shows the last copy outcome, and marks a refusal, without being a live region (#25)', async () => {
     const app = mountApp()
     await openBytes(Array.from({ length: 64 }, (_u, i) => i))
@@ -206,7 +165,7 @@ describe('the status bar (#23)', () => {
     // Nothing shown until a copy happens.
     expect(field(app, 'copy-status')).toBeNull()
 
-    store.copyStatus = { ok: true, message: 'Copied 4 bytes to the clipboard as hex.' }
+    store.actionStatus = { ok: true, message: 'Copied 4 bytes to the clipboard as hex.' }
     await flushPromises()
     let shown = app.find('[data-field="copy-status"]')
     expect(shown.text()).toBe('Copied 4 bytes to the clipboard as hex.')
@@ -215,7 +174,7 @@ describe('the status bar (#23)', () => {
     expect(shown.attributes('aria-live')).toBeUndefined()
     expect(shown.attributes('role')).toBeUndefined()
 
-    store.copyStatus = { ok: false, message: 'Selection is 9.0 MiB … Nothing was copied.' }
+    store.actionStatus = { ok: false, message: 'Selection is 9.0 MiB … Nothing was copied.' }
     await flushPromises()
     shown = app.find('[data-field="copy-status"]')
     expect(shown.text()).toContain('Nothing was copied.')
@@ -256,7 +215,7 @@ describe('the action live region (#28)', () => {
     await openBytes(Array.from({ length: 64 }, (_u, i) => i))
     const store = useDocumentStore(pinia)
 
-    store.copyStatus = { ok: true, message: 'Copied 4 bytes to the clipboard as hex.' }
+    store.actionStatus = { ok: true, message: 'Copied 4 bytes to the clipboard as hex.' }
     await flushPromises()
 
     expect(action(app).text()).toBe('Copied 4 bytes to the clipboard as hex.')
@@ -267,7 +226,7 @@ describe('the action live region (#28)', () => {
     await openBytes(Array.from({ length: 64 }, (_u, i) => i))
     const store = useDocumentStore(pinia)
 
-    store.copyStatus = {
+    store.actionStatus = {
       ok: false,
       message: 'Selection is 9.0 MiB — over the 8 MiB copy limit. Nothing was copied.',
     }
@@ -295,7 +254,7 @@ describe('the action live region (#28)', () => {
     const store = useDocumentStore(pinia)
 
     store.setCursor(4)
-    store.copyStatus = { ok: true, message: 'Copied 1 byte to the clipboard as hex.' }
+    store.actionStatus = { ok: true, message: 'Copied 1 byte to the clipboard as hex.' }
     await flushPromises()
     expect(action(app).text()).toContain('Copied 1 byte')
 
