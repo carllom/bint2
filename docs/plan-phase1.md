@@ -378,7 +378,7 @@ projects; **webkit is allowed to fail**.
 **Deliberately not automated:** anything about the dead source in e2e (it is
 component-tested against a rejecting source, plus the unit-tested latch); real
 large-file performance (a manual pass at ~700 MB and ~2 GB, noted in the README);
-one manual NVDA + VoiceOver pass.
+one manual NVDA pass (VoiceOver out of scope — no Apple hardware).
 
 ## 12. Milestones
 
@@ -397,7 +397,7 @@ the accessibility structure all fail that test if deferred.
 | M4 | `VirtualScrollbar` + wheel/keyboard nav over a large synthetic source | |
 | M5 | Real file open + reject policy; async reads with placeholders + generation guard; `readSync` fast path; **Goto**; **Cursor**; **Selection**; hex copy with the 8 MiB refusal; status bar in full incl. file name and size; **dead-source banner + escalation**; **all accessibility structure**; README accessibility paragraph | ✅ **public ship** |
 | M7 | Hover highlight, raw-text copy — nothing else | hardening |
-| M8 | e2e suite incl. the keyboard-only journey; chrome-only axe smoke with the viewport excluded *and documented*; one manual NVDA + VoiceOver pass; manual perf pass at ~700 MB and ~2 GB; tool README incl. the size bands | hardening |
+| M8 | e2e suite incl. the keyboard-only journey; chrome-only axe smoke with the viewport excluded *and documented*; one manual NVDA pass (VoiceOver out of scope — no Apple hardware); manual perf pass at ~700 MB and ~2 GB; tool README incl. the size bands | hardening |
 
 Phase 1 is shippable at **M5**; M7–M8 harden UX and confidence.
 

@@ -103,7 +103,9 @@ clean pass is the result that keeps the worker deferred.
 
 ### Results
 
-> **Status: not yet run.** Fill in on the first pass.
+> **Status: run 2026-09-08** (build `6b61f4b`, Edge 152 / Windows 11). Clean
+> pass — frame times flat, heap plateaus, no paging-attributable long tasks.
+> The deferred worker stays deferred.
 
 | Field | Value |
 | --- | --- |
@@ -149,10 +151,15 @@ clean pass is the result that keeps the worker deferred.
 
 ### What it has to show
 
-Two journeys, on each of NVDA (Windows) and VoiceOver (macOS):
+Two journeys on NVDA (Windows):
 
 - **A — Open a file and hear its name and size.**
 - **B — Walk the Cursor and hear the offset and the byte at each step.**
+
+VoiceOver (macOS) is **out of scope**: no Apple hardware is available to the
+project. Safari / WebKit is best-effort and untested for the same reason
+(README "Browser support"). If an Apple device becomes available, restore the
+VoiceOver leg from git history.
 
 The byte grid itself is hidden from assistive technology on purpose
 ([ADR-0005](./adr/0005-the-byte-grid-is-not-a-document.md)); it is **not** part
@@ -164,8 +171,7 @@ labelling around it, not a reading of the dump.
 - **Windows / NVDA** — install NVDA (free), current desktop Chrome, Edge, or
   Firefox. Run against `npm run preview`. A small real file (a few KB) is
   enough; the point is what is spoken, not scale.
-- **macOS / VoiceOver** — built in, toggle with `Cmd+F5`. Current desktop
-  Safari and Chrome. Learn the VoiceOver key (`Ctrl+Option`, written `VO`).
+- **macOS / VoiceOver** — out of scope (see above).
 
 ### Journey A — open, hear name and size
 
@@ -197,7 +203,8 @@ labelling around it, not a reading of the dump.
 
 ### Results
 
-> **Status: not yet run.** Fill in on the first pass.
+> **Status: run 2026-09-08** (build `6b61f4b`). NVDA both journeys pass.
+> VoiceOver out of scope — no Apple hardware.
 
 | Field | Value |
 | --- | --- |
