@@ -28,3 +28,9 @@ A reader watching the inspector's numbers change with no local cause is seeing
 this setting; the toolbar control and the `b` hotkey are the only things that
 move it, and the char column / offset column / `u8` / `i8` / `bin` / hex-copy /
 raw-text copy are all deliberately unaffected.
+
+The [code page](../../CONTEXT.md) ([#56](https://github.com/carllom/bint2/issues/56))
+follows this same shape for the same reasons — one persisted, view-wide setting,
+not per-selection or per-file — as the mirror image: it governs only the char
+column's glyphs and touches no numeric decode, where byte order governs every
+numeric decode and never the char column.
