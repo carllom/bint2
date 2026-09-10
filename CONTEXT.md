@@ -137,3 +137,12 @@ next. Equal to Width by default; when larger, the extra trailing bytes of each
 row are skipped, so one column of a wider repeating structure can be viewed in
 isolation.
 _Avoid_: pitch, step, row gap
+
+**Extent**:
+The run of document bytes the Bitmap currently renders — from the Origin to the
+end of its last row, `[Origin, Origin + Stride·(Height−1) + Width)`. Shown in the
+byte grid as passive chrome while the Origin is locked, so the reader can see
+where an off-screen Bitmap is pointed. Transient view chrome that carries no
+meaning of its own and disappears once the Origin follows the Cursor again — not
+an Annotation.
+_Avoid_: coverage, footprint, reveal, region
