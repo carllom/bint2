@@ -43,15 +43,24 @@ describe('the Bitmap store — the Origin state machine', () => {
     expect(bitmap.lockedOffset).toBeNull()
   })
 
-  it('setLockedOffset moves a locked Origin, and is a no-op while following', () => {
+  it('nudgeOrigin / jumpOrigin move a locked Origin, clamped to [0, size]; no-op while following', () => {
+    const documentStore = useDocumentStore()
     const bitmap = useBitmapStore()
+    documentStore.open(sourceOfSize(4096), 'a.bin')
 
-    bitmap.setLockedOffset(500) // following — ignored
+    bitmap.nudgeOrigin(40) // following — ignored
+    bitmap.jumpOrigin(40)
     expect(bitmap.lockedOffset).toBeNull()
 
     bitmap.lockOrigin(100)
-    bitmap.setLockedOffset(140)
+    bitmap.nudgeOrigin(40)
     expect(bitmap.lockedOffset).toBe(140)
+
+    bitmap.nudgeOrigin(-1000) // clamps at 0
+    expect(bitmap.lockedOffset).toBe(0)
+
+    bitmap.jumpOrigin(999_999) // clamps at size — not size − 1 (plan §4.10)
+    expect(bitmap.lockedOffset).toBe(4096)
   })
 
   it('drops the lock when another document is opened (the universal reset)', () => {

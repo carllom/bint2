@@ -35,11 +35,14 @@ function fileOf(bytes: number[], name = 'pattern.bin'): File {
   return new File([Uint8Array.from(bytes)], name)
 }
 
+/** The Bitmap accordion trigger — the second section, after the Inspector. */
+const bitmapTrigger = (app: VueWrapper) => app.findAll('button.accordion-trigger')[1]!
+
 /** Open a document and open the Bitmap accordion section. */
 async function openWithBitmap(source: ByteSource, name = 'pattern.bin'): Promise<void> {
   useDocumentStore(pinia).open(source, name)
   await flushPromises()
-  await wrapper!.findAll('button.accordion-trigger')[1]!.trigger('click') // Bitmap is second
+  await bitmapTrigger(wrapper!).trigger('click')
   await flushPromises()
 }
 
@@ -91,7 +94,7 @@ function bitmapContainer(app: VueWrapper) {
 /** Click the Bitmap accordion trigger — closes the section when open, reopens it
  *  when closed. `unmount-on-hide` means a close destroys `BitmapPanel`. */
 async function toggleBitmapSection(app: VueWrapper): Promise<void> {
-  await app.findAll('button.accordion-trigger')[1]!.trigger('click')
+  await bitmapTrigger(app).trigger('click')
   await flushPromises()
 }
 
@@ -571,7 +574,7 @@ describe('the Bitmap Panel — Origin nudge keys (plan §4.5)', () => {
     await flushPromises()
     const locked = bitsOf(app)
 
-    const trigger = app.findAll('button.accordion-trigger')[1]!
+    const trigger = bitmapTrigger(app)
     await trigger.trigger('keydown', { code: 'ArrowRight' })
     await trigger.trigger('keydown', { code: 'KeyL' })
     await flushPromises()

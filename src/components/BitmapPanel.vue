@@ -65,9 +65,12 @@ const origin = computed<number | null>(() =>
 const hasOrigin = computed(() => origin.value !== null)
 
 /** The read-only header state line (plan §4.4): "Following cursor" or
- *  "Locked · 0x…". There is no typed Origin field. */
+ *  "Locked · 0x…". There is no typed Origin field. `origin` is the locked
+ *  offset here, so no separate null check is needed. */
 const statusText = computed(() =>
-  locked.value ? `Locked · 0x${toHex(bitmap.lockedOffset ?? 0)}` : 'Following cursor',
+  locked.value && origin.value !== null
+    ? `Locked · 0x${toHex(origin.value)}`
+    : 'Following cursor',
 )
 
 // ── Render parameters (plan §4.2) ──────────────────────────────────────────
@@ -272,12 +275,6 @@ function toggleLock(): void {
   }
 }
 
-/** Move a locked Origin, clamped to `[0, size]` — Origin `== size` is a legal
- *  "nudged off the end" state (plan §4.10). Never touches the Cursor. */
-function moveOrigin(to: number): void {
-  bitmap.setLockedOffset(clamp(to, 0, documentStore.fileSize))
-}
-
 // ── Keys (plan §4.5, bound by `KeyboardEvent.code`, layout-independent) ────
 // Either mode: `Comma` / `Period` = Width ∓ 1; `Shift` for Stride ∓ 1 (steps
 // `bitmapStrideOffset`, clamped ≥ 0); `KeyL` toggles Lock / Follow. Locked only:
@@ -313,42 +310,41 @@ function onKeydown(event: KeyboardEvent): void {
   }
 
   // Origin nudges — locked mode only; in Follow the Cursor is the linkage and
-  // these keys are inert (plan §4.4).
-  if (!locked.value || bitmap.lockedOffset === null) {
+  // these keys are inert (plan §4.4). One row is a Stride; one page is the whole
+  // bitmap — Stride × the Height rows the canvas always draws (plan §4.10). The
+  // offset arithmetic and the `[0, size]` clamp live on the store.
+  if (!locked.value) {
     return
   }
-  const here = bitmap.lockedOffset
-  let target: number
   switch (event.code) {
     case 'ArrowLeft':
-      target = here - 1
+      bitmap.nudgeOrigin(-1)
       break
     case 'ArrowRight':
-      target = here + 1
+      bitmap.nudgeOrigin(1)
       break
     case 'ArrowUp':
-      target = here - stride.value
+      bitmap.nudgeOrigin(-stride.value)
       break
     case 'ArrowDown':
-      target = here + stride.value
+      bitmap.nudgeOrigin(stride.value)
       break
     case 'PageUp':
-      target = here - stride.value * height.value
+      bitmap.nudgeOrigin(-stride.value * height.value)
       break
     case 'PageDown':
-      target = here + stride.value * height.value
+      bitmap.nudgeOrigin(stride.value * height.value)
       break
     case 'Home':
-      target = 0
+      bitmap.jumpOrigin(0)
       break
     case 'End':
-      target = documentStore.fileSize
+      bitmap.jumpOrigin(documentStore.fileSize)
       break
     default:
       return
   }
   event.preventDefault()
-  moveOrigin(target)
 }
 
 function focusSelf(event: PointerEvent): void {
@@ -490,7 +486,8 @@ defineExpose({ frame })
   gap: 0.25rem 1ch;
 }
 
-/* Matches the Inspector's `hex` control strip button (plan §3.5). */
+/* The lock toggle: a pressed-state button on the shared control tokens, in the
+   spirit of the Inspector's `hex` control strip (plan §3.5). */
 .bitmap__lock {
   padding: 0.1em 0.4em;
   border: 1px solid var(--color-border);

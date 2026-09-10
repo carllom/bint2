@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { useDocumentStore } from '@/stores/document'
 
+const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi)
+
 /**
  * The Bitmap's follow/lock **Origin** state machine (CONTEXT.md "Origin",
  * ADR-0008, plan-phase1.75 §4.4). Two modes:
@@ -71,16 +73,29 @@ export const useBitmapStore = defineStore('bitmap', () => {
   }
 
   /**
-   * Move the locked Origin to `offset` — the section's `←→` / `↑↓` /
-   * `PageUp`·`PageDown` / `Home`·`End` keys (plan §4.5), already clamped by the
-   * caller to `[0, size]`. A no-op while following, so a stray call in Follow
+   * Nudge the locked Origin by `delta` bytes — `±1`, `±Stride`, `±(Stride ×
+   * rows)` from the section's `←→` / `↑↓` / `PageUp`·`PageDown` keys (plan
+   * §4.5). Clamped to `[0, size]`; Origin `== size` is a legal "nudged off the
+   * end" state (plan §4.10). A no-op while following, so a stray call in Follow
    * mode can never resurrect a stale offset.
    */
-  function setLockedOffset(offset: number): void {
-    if (originLocked.value) {
-      lockedOffset.value = offset
+  function nudgeOrigin(delta: number): void {
+    if (!originLocked.value || lockedOffset.value === null) {
+      return
     }
+    lockedOffset.value = clamp(lockedOffset.value + delta, 0, documentStore.fileSize)
   }
 
-  return { originLocked, lockedOffset, lockOrigin, followCursor, setLockedOffset }
+  /**
+   * Jump the locked Origin to an absolute offset — `Home` → `0`, `End` → `size`
+   * (plan §4.5, §4.10). Same clamp, same Follow-mode no-op as {@link nudgeOrigin}.
+   */
+  function jumpOrigin(to: number): void {
+    if (!originLocked.value) {
+      return
+    }
+    lockedOffset.value = clamp(to, 0, documentStore.fileSize)
+  }
+
+  return { originLocked, lockedOffset, lockOrigin, followCursor, nudgeOrigin, jumpOrigin }
 })
