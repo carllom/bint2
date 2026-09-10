@@ -29,12 +29,20 @@ export default defineConfigWithVueTs(
   {
     ...pluginVitest.configs.recommended,
     files: ['src/**/__tests__/*'],
+    rules: {
+      // `expectScopedStyleHook` (src/components/shell/__tests__/helpers.ts) is a
+      // custom assertion wrapper — teach the rule it counts as an assertion.
+      'vitest/expect-expect': ['error', { assertFunctionNames: ['expect', 'expectScopedStyleHook'] }],
+    },
   },
 
   {
     // src/core is the framework-free core (see src/core/index.ts). Enforced here
     // as well as by src/core/__tests__/framework-free.spec.ts — keep the two
-    // forbidden lists in step.
+    // forbidden lists in step. `reka-ui` joins the list: ADR-0009 §1 bans it in
+    // src/core outright, and flat config *replaces* `no-restricted-imports`
+    // rather than merging it, so the confinement rule below cannot add the ban
+    // for src/core without dropping the vue/pinia one — it has to live here.
     name: 'app/core-is-framework-free',
     files: ['src/core/**/*.{ts,mts}'],
     ignores: ['src/core/**/__tests__/**'],
@@ -46,9 +54,43 @@ export default defineConfigWithVueTs(
             { name: 'vue', message: 'src/core must stay framework-free.' },
             { name: 'pinia', message: 'src/core must stay framework-free.' },
             { name: 'vue-router', message: 'src/core must stay framework-free.' },
+            { name: 'reka-ui', message: 'src/core must stay framework-free.' },
           ],
           patterns: [
-            { group: ['@vue/*', '@vitejs/*'], message: 'src/core must stay framework-free.' },
+            {
+              group: ['@vue/*', '@vitejs/*', 'reka-ui/*'],
+              message: 'src/core must stay framework-free.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
+    // The UI framework (Reka UI) is confined to the src/components/ wrapper
+    // layer — the wrappers are the only seam (ADR-0009, #77). Everything else
+    // imports the wrappers, never `reka-ui`. src/core has its own, stricter
+    // override above; it is excluded here so the two do not fight over
+    // `no-restricted-imports` (flat config replaces, it does not merge).
+    name: 'app/reka-ui-confined-to-shell-chrome',
+    files: ['src/**/*.{vue,ts,mts,tsx}'],
+    ignores: ['src/components/**', 'src/core/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'reka-ui',
+              message: 'reka-ui is confined to the src/components/ wrapper layer (ADR-0009).',
+            },
+          ],
+          patterns: [
+            {
+              group: ['reka-ui/*'],
+              message: 'reka-ui is confined to the src/components/ wrapper layer (ADR-0009).',
+            },
           ],
         },
       ],
