@@ -11,8 +11,9 @@ import HomeView from '@/views/HomeView.vue'
 
 // The Inspector (#54, plan §3), asserted at the app-shell seam: HomeView mounted
 // whole, a real file-backed source, every row's decode, the hex and byte-order
-// toggles, the three empty states, row-value copy through `actionStatus`, dock
-// and collapse with focus retention, and tab order.
+// toggles, the three empty states, row-value copy through `actionStatus`, and
+// DOM order between the viewport and the status bar. The phase-1.75 surgery
+// (plan-phase1.75.md §3.5) removed the dock toggle and the collapse-to-bar.
 
 let pinia: Pinia
 let wrapper: VueWrapper | null = null
@@ -302,54 +303,28 @@ describe('the Inspector Panel — row-value copy (plan §3.6)', () => {
   })
 })
 
-describe('the Inspector Panel — dock, collapse, tab order (plan §3.1, §3.7)', () => {
-  it('flips the dock, persisting it and restyling the panel', async () => {
+describe('the Inspector Panel — DOM order (plan §3.1, §3.7)', () => {
+  it('has no dock-toggle or collapse-to-bar control (phase-1.75 §3.5)', async () => {
     const app = mountApp()
     await openBytes(ASC)
-    expect(app.find('.app-shell').attributes('data-inspector-dock')).toBe('bottom')
 
-    await app.find('[data-field="inspector-dock"]').trigger('click')
-
-    expect(usePreferencesStore(pinia).dock).toBe('right')
-    expect(app.find('.app-shell').attributes('data-inspector-dock')).toBe('right')
-    expect(app.find('[data-region="inspector"]').classes()).toContain('inspector--right')
+    expect(app.find('[data-field="inspector-dock"]').exists()).toBe(false)
+    expect(app.find('[data-field="inspector-collapse"]').exists()).toBe(false)
+    expect(app.find('[data-field="inspector-expand"]').exists()).toBe(false)
+    // The rows are always present while a document is open — no collapsed state.
+    expect(app.find('[data-field="inspector-u8"]').exists()).toBe(true)
   })
 
-  it('collapses to a bar and keeps focus on the toggle, then expands and restores it', async () => {
+  it('sits between the viewport and the status bar in DOM order', async () => {
     const app = mountApp()
     await openBytes(ASC)
 
-    await app.find('[data-field="inspector-collapse"]').trigger('click')
-    await flushPromises()
-
-    expect(usePreferencesStore(pinia).collapsed).toBe(true)
-    const bar = app.find('[data-field="inspector-expand"]')
-    expect(bar.exists()).toBe(true)
-    expect(app.find('[data-field="inspector-u8"]').exists()).toBe(false) // rows gone
-    expect(document.activeElement).toBe(bar.element)
-
-    await bar.trigger('click')
-    await flushPromises()
-    expect(usePreferencesStore(pinia).collapsed).toBe(false)
-    expect(document.activeElement).toBe(app.find('[data-field="inspector-collapse"]').element)
-  })
-
-  it('sits between the viewport and the status bar in DOM order, whatever the dock', async () => {
-    const app = mountApp()
-    await openBytes(ASC)
-
-    const order = () => {
-      const viewport = app.find('[data-region="viewport"]').element
-      const inspector = app.find('[data-region="inspector"]').element
-      const statusBar = app.find('[data-region="status-bar"]').element
-      return (
-        !!(viewport.compareDocumentPosition(inspector) & Node.DOCUMENT_POSITION_FOLLOWING) &&
-        !!(inspector.compareDocumentPosition(statusBar) & Node.DOCUMENT_POSITION_FOLLOWING)
-      )
-    }
-    expect(order()).toBe(true)
-
-    await app.find('[data-field="inspector-dock"]').trigger('click') // -> right
-    expect(order()).toBe(true)
+    const viewport = app.find('[data-region="viewport"]').element
+    const inspector = app.find('[data-region="inspector"]').element
+    const statusBar = app.find('[data-region="status-bar"]').element
+    expect(
+      !!(viewport.compareDocumentPosition(inspector) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+        !!(inspector.compareDocumentPosition(statusBar) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true)
   })
 })

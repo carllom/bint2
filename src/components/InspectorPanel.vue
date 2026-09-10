@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { computed, nextTick, useTemplateRef, watch } from 'vue'
+import { computed } from 'vue'
 import { decodeInspectorRow, INSPECTOR_READ_LENGTH, INSPECTOR_ROWS } from '@/core'
 import { useBytesAt } from '@/composables/useBytesAt'
 import { useDocumentStore } from '@/stores/document'
 import { usePreferencesStore } from '@/stores/preferences'
 
-// The Inspector (CONTEXT.md, #54, plan §3): a docked Panel decoding the bytes at
-// the Cursor into every primitive numeric type at once — read on demand, never
+// The Inspector (CONTEXT.md, #54, plan §3): a Panel decoding the bytes at the
+// Cursor into every primitive numeric type at once — read on demand, never
 // spoken (the Viewport's cursor live region already speaks position and byte,
-// ADR-0005). A one-off in a named `HomeView` layout slot, not a panel
-// framework. Byte order (#55) comes from the `preferences` store; its control
-// lives on the main toolbar, not this header.
+// ADR-0005). Byte order (#55) comes from the `preferences` store; its control
+// lives on the main toolbar. The `hex` toggle (plan §3.3) sits in a small
+// control strip at the top of the Panel's content.
+//
+// Phase 1.75 surgery (plan-phase1.75.md §3.5): the bottom/right dock, the
+// dock-toggle button, the collapse-to-thin-bar button, the inline-width `watch`
+// and `resize: horizontal` are gone. Whether the Panel is shown is the
+// Sidebar's accordion's job (#80); here it simply renders whenever a document
+// is open.
 
 const NO_CURSOR = '—' // no Cursor yet, or a type wider than the bytes left at EOF
 const PENDING = '··' // bytes not yet resident — the grid's pending glyph
@@ -49,8 +55,8 @@ interface RenderedRow {
 
 /**
  * One hairline-separated group of rows (plan §3.2) — `u16`/`i16`, `f32`/`f64`,
- * etc. The group, not the row, is the wrap unit in the bottom strip (plan §3.1):
- * the unsigned and signed rows of a width always move to the next line together.
+ * etc. The group, not the row, is the wrap unit: the unsigned and signed rows of
+ * a width always move to the next line together.
  */
 interface RenderedGroup {
   readonly key: string
@@ -93,35 +99,6 @@ const groups = computed<RenderedGroup[]>(() => {
   return out
 })
 
-const panel = useTemplateRef<HTMLElement>('panel')
-const collapseToggle = useTemplateRef<HTMLButtonElement>('collapseToggle')
-const expandBar = useTemplateRef<HTMLButtonElement>('expandBar')
-
-// The right-dock column is horizontally resizable (CSS `resize`), which writes
-// an inline width onto the panel. Drop it whenever the layout mode changes so a
-// width picked while docked right never leaks into the bottom strip or the
-// collapsed bar. The chosen width is deliberately not persisted (plan §3.1).
-watch(
-  () => [preferences.dock, preferences.collapsed],
-  () => panel.value?.style.removeProperty('width'),
-)
-
-/** Collapse / expand, keeping focus on whichever control the reader is now on (plan §3.7). */
-async function toggleCollapsed(): Promise<void> {
-  const next = !preferences.collapsed
-  preferences.setCollapsed(next)
-  await nextTick()
-  if (next) {
-    expandBar.value?.focus()
-  } else {
-    collapseToggle.value?.focus()
-  }
-}
-
-function toggleDock(): void {
-  preferences.setDock(preferences.dock === 'bottom' ? 'right' : 'bottom')
-}
-
 function toggleHex(): void {
   preferences.setIntHex(!preferences.intHex)
 }
@@ -137,150 +114,71 @@ function copyRow(row: RenderedRow): void {
 <template>
   <section
     v-if="hasSource"
-    ref="panel"
     class="inspector"
-    :class="[`inspector--${preferences.dock}`, { 'inspector--collapsed': preferences.collapsed }]"
     role="region"
     aria-label="Cursor inspector"
     data-region="inspector"
   >
-    <button
-      v-if="preferences.collapsed"
-      ref="expandBar"
-      type="button"
-      class="inspector__bar"
-      :aria-expanded="false"
-      data-field="inspector-expand"
-      @click="toggleCollapsed"
-    >
-      <span class="inspector__bar-label">inspector</span>
-      <span class="inspector__chevron" aria-hidden="true">▸</span>
-    </button>
+    <div class="inspector__controls">
+      <button
+        type="button"
+        class="inspector__ctl inspector__ctl--text"
+        :aria-pressed="preferences.intHex"
+        aria-label="Show integers as hexadecimal"
+        data-field="inspector-hex"
+        @click="toggleHex"
+      >
+        hex
+      </button>
+    </div>
 
-    <template v-else>
-      <div class="inspector__header">
-        <button
-          ref="collapseToggle"
-          type="button"
-          class="inspector__ctl"
-          :aria-expanded="true"
-          aria-label="Collapse the inspector"
-          data-field="inspector-collapse"
-          @click="toggleCollapsed"
-        >
-          <span aria-hidden="true">▾</span>
-        </button>
-        <button
-          type="button"
-          class="inspector__ctl"
-          :aria-label="
-            preferences.dock === 'bottom' ? 'Dock the inspector right' : 'Dock the inspector bottom'
-          "
-          data-field="inspector-dock"
-          @click="toggleDock"
-        >
-          <span aria-hidden="true">{{ preferences.dock === 'bottom' ? '⇥' : '⤓' }}</span>
-        </button>
-        <button
-          type="button"
-          class="inspector__ctl inspector__ctl--text"
-          :aria-pressed="preferences.intHex"
-          aria-label="Show integers as hexadecimal"
-          data-field="inspector-hex"
-          @click="toggleHex"
-        >
-          hex
-        </button>
-      </div>
-
-      <div class="inspector__rows">
-        <ul
-          v-for="(group, index) in groups"
-          :key="group.key"
-          class="inspector__group"
-          :class="{ 'inspector__group--rule': index > 0 }"
-        >
-          <li v-for="row in group.rows" :key="row.key" class="inspector__row">
-            <span class="inspector__label" :title="row.ariaLabel">{{ row.label }}</span>
-            <button
-              type="button"
-              class="inspector__value"
-              :class="{ 'inspector__value--placeholder': row.state !== 'value' }"
-              :disabled="row.state !== 'value'"
-              :aria-label="`Copy the ${row.ariaLabel} value`"
-              :data-field="`inspector-${row.key}`"
-              @click="copyRow(row)"
-            >
-              {{ row.text }}
-            </button>
-          </li>
-        </ul>
-      </div>
-    </template>
+    <div class="inspector__rows">
+      <ul
+        v-for="(group, index) in groups"
+        :key="group.key"
+        class="inspector__group"
+        :class="{ 'inspector__group--rule': index > 0 }"
+      >
+        <li v-for="row in group.rows" :key="row.key" class="inspector__row">
+          <span class="inspector__label" :title="row.ariaLabel">{{ row.label }}</span>
+          <button
+            type="button"
+            class="inspector__value"
+            :class="{ 'inspector__value--placeholder': row.state !== 'value' }"
+            :disabled="row.state !== 'value'"
+            :aria-label="`Copy the ${row.ariaLabel} value`"
+            :data-field="`inspector-${row.key}`"
+            @click="copyRow(row)"
+          >
+            {{ row.text }}
+          </button>
+        </li>
+      </ul>
+    </div>
   </section>
 </template>
 
 <style scoped>
+/* A full-width strip above the status bar: the control strip, then the rows,
+   the group the wrap unit on a narrow screen (plan §3.1, §3.2). The Sidebar
+   relocation and per-section collapse are #80's. */
 .inspector {
   flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1.5ch;
+  width: 100%;
+  max-height: 40%;
+  overflow: auto;
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid var(--color-border);
   font-family: var(--font-mono);
   color: var(--color-fg);
   background: var(--color-bg);
 }
 
-/* Bottom strip: full width above the status bar, header then fields, wrapping
-   to multiple rows on a narrow screen (plan §3.1). */
-.inspector--bottom {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 1.5ch;
-  width: 100%;
-  padding: 0.25rem 0.5rem;
-  border-top: 1px solid var(--color-border);
-}
-
-/* Right column: a stacked column down the right edge, header above the stack.
-   Horizontally resizable (plan §3.1), from a readable minimum up to the width
-   of the byte grid at 32 bytes per row — ~8ch offset + 2ch gap + 95ch hex
-   (32×2ch + 31×1ch) + 2ch gap + 32ch char + the grid's 0.5rem side padding.
-   Past that the panel is wider than the view it inspects. `overflow` is not
-   `visible` so the `resize` handle renders; the width is not persisted. */
-.inspector--right {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  height: 100%;
-  width: 32ch;
-  min-width: 16ch;
-  max-width: 141ch;
-  padding: 0.5rem;
-  overflow: auto;
-  resize: horizontal;
-  border-left: 1px solid var(--color-border);
-}
-
-.inspector__bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5ch;
-  width: 100%;
-  padding: 0.25rem 0.5rem;
-  border: none;
-  background: none;
-  color: var(--color-fg-dim);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.inspector--right.inspector--collapsed {
-  width: auto;
-  min-width: 0;
-  resize: none;
-}
-
-.inspector__header {
+.inspector__controls {
   display: inline-flex;
   align-items: center;
   gap: 0.5ch;
@@ -312,30 +210,16 @@ function copyRow(row: RenderedRow): void {
   gap: 0.25rem 1.5ch;
 }
 
-.inspector--right .inspector__rows {
-  flex-direction: column;
-  flex-wrap: nowrap;
-}
-
-/* The group is the wrap unit (plan §3.1): in the bottom strip its rows sit in a
-   row and never break apart — a narrow viewport wraps whole groups. In the
-   right column they stack. */
+/* The group is the wrap unit (plan §3.1): its rows sit in a row and never break
+   apart — a narrow viewport wraps whole groups. */
 .inspector__group {
   display: flex;
   align-items: baseline;
+  flex-wrap: nowrap;
   gap: 0.75ch 1.5ch;
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.inspector--bottom .inspector__group {
-  flex-wrap: nowrap;
-}
-
-.inspector--right .inspector__group {
-  flex-direction: column;
-  align-items: stretch;
 }
 
 .inspector__row {
@@ -344,16 +228,10 @@ function copyRow(row: RenderedRow): void {
   gap: 0.75ch;
 }
 
-/* The hairline between groups (plan §3.2): a rule before every group but the
-   first — vertical in the bottom strip, horizontal in the right column. */
-.inspector--bottom .inspector__group--rule {
+/* The hairline between groups (plan §3.2): a rule before every group but the first. */
+.inspector__group--rule {
   border-left: 1px solid var(--color-border);
   padding-left: 1.5ch;
-}
-
-.inspector--right .inspector__group--rule {
-  border-top: 1px solid var(--color-border);
-  padding-top: 0.25rem;
 }
 
 .inspector__label {
