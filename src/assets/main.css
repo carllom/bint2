@@ -18,6 +18,10 @@
   /* The byte under the pointer (#30) — a quiet fill, clearly neither the
      Selection nor the Cursor. */
   --color-hover: #3a3d41;
+  /* The Bitmap's past-EOF fill (plan-phase1.75 §4.10) — a muted, theme-toned
+     "no byte here", the pixel-view analogue of the Inspector's dim em dash.
+     Chrome, not data: `invert` never touches it. */
+  --color-bitmap-eof: #3a3a3a;
 }
 
 @media (prefers-color-scheme: light) {
@@ -31,6 +35,7 @@
     --color-selection-fg: #1e1e1e;
     --color-cursor: #0067c0;
     --color-hover: #e4e6eb;
+    --color-bitmap-eof: #d0d0d0;
   }
 }
 

@@ -11,12 +11,13 @@
 
 export type {
   BitOrder,
+  EofByteSlotsParams,
   PackBitmapParams,
   PackedBitmap,
   PackOrder,
   RowByteSpanParams,
 } from './bitmap'
-export { packBitmap, rowByteSpan } from './bitmap'
+export { eofByteSlots, packBitmap, rowByteSpan } from './bitmap'
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
 export type { CodePage } from './codepages'

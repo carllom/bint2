@@ -3,7 +3,7 @@ import type { Pinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ByteSourceError, FileByteSource, packBitmap, rowByteSpan } from '@/core'
+import { ByteSourceError, eofByteSlots, FileByteSource, packBitmap, rowByteSpan } from '@/core'
 import type { ByteSource, PackBitmapParams, PackedBitmap } from '@/core'
 import { useDocumentStore } from '@/stores/document'
 import { PREFERENCES_STORAGE_KEY, usePreferencesStore } from '@/stores/preferences'
@@ -104,6 +104,58 @@ const statusText = (app: VueWrapper): string =>
 const lockToggle = (app: VueWrapper) => app.find('[data-field="bitmap-lock-toggle"]')
 
 const bitsOf = (app: VueWrapper): number[] => Array.from(frameOf(app)!.bits)
+
+// ── The #83 render model, exposed because happy-dom's `<canvas>` has no 2-D
+//    context so the painted pixels are unobservable (plan §7, §4.10). ────────
+interface RenderModel {
+  renderState: 'no-origin' | 'pending' | 'dead-salvage' | 'resident'
+  eofMask: Uint8Array | null
+  salvagedRows: boolean[] | null
+}
+const modelOf = (app: VueWrapper): RenderModel =>
+  app.findComponent(BitmapPanel).vm as unknown as RenderModel
+
+/** `readSync` always misses; every `read` is parked until {@link flushReads}
+ *  releases it with the real `PATTERN` slice — lets a test watch the pending
+ *  frame before the bytes land. */
+class ParkedSource implements ByteSource {
+  readonly size = PATTERN.length
+  #parked: Array<{ offset: number; length: number; resolve: (b: Uint8Array) => void }> = []
+  readSync(): Uint8Array | null {
+    return null
+  }
+  read(offset: number, length: number): Promise<Uint8Array> {
+    return new Promise((resolve) => this.#parked.push({ offset, length, resolve }))
+  }
+  prefetch(): void {}
+  close(): void {}
+  flushReads(): void {
+    const queued = this.#parked
+    this.#parked = []
+    for (const { offset, length, resolve } of queued) {
+      resolve(Uint8Array.from(PATTERN.slice(offset, Math.min(offset + length, this.size))))
+    }
+  }
+}
+
+/** A dead source: `readSync` still answers for the first `residentBytes` bytes
+ *  (already-resident pages, ADR-0004), but every `read` rejects `source-gone`.
+ *  Drives the one-time per-row salvage sweep (plan §4.10). */
+class DeadSource implements ByteSource {
+  readonly size = PATTERN.length
+  constructor(private readonly residentBytes: number) {}
+  readSync(offset: number, length: number): Uint8Array | null {
+    if (offset < 0 || offset + length > this.residentBytes) {
+      return null
+    }
+    return Uint8Array.from(PATTERN.slice(offset, offset + length))
+  }
+  read(): Promise<Uint8Array> {
+    return Promise.reject(new ByteSourceError('source-gone'))
+  }
+  prefetch(): void {}
+  close(): void {}
+}
 
 beforeEach(() => {
   pinia = createPinia()
@@ -599,5 +651,179 @@ describe('the Bitmap Panel — Origin nudge keys (plan §4.5)', () => {
     const persisted = JSON.parse(localStorage.getItem(PREFERENCES_STORAGE_KEY) ?? '{}')
     expect(Object.keys(persisted)).not.toContain('originLocked')
     expect(Object.keys(persisted)).not.toContain('lockedOffset')
+  })
+})
+
+describe('the Bitmap Panel — EOF / pending / dead-source rendering (plan §4.10, #83)', () => {
+  /** The canvas intrinsic buffer, read straight off the element attributes. */
+  const canvasSize = (app: VueWrapper): [number, number] => {
+    const cv = app.find('[data-field="bitmap-canvas"]')
+    return [Number(cv.attributes('width')), Number(cv.attributes('height'))]
+  }
+
+  it('keeps the canvas at Height × Width·8 px however little of the span is available', async () => {
+    const app = mountApp()
+    const parked = new ParkedSource()
+    await openWithBitmap(parked, 'parked.bin')
+    useDocumentStore(pinia).setCursor(0)
+    await flushPromises()
+
+    const { width, height } = geometry(app)
+    // Pending — not one byte resident — and the buffer is still the full frame.
+    expect(modelOf(app).renderState).toBe('pending')
+    expect(canvasSize(app)).toEqual([width * 8, height])
+
+    parked.flushReads()
+    await flushPromises()
+    expect(modelOf(app).renderState).toBe('resident')
+    expect(canvasSize(app)).toEqual([width * 8, height]) // unchanged by the arrival
+  })
+
+  it('marks the past-EOF byte-slots per-slot across a straddling row, independent of invert', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    // PATTERN is 4096 bytes; a Cursor near the end makes the span straddle size.
+    const near = PATTERN.length - 100
+    useDocumentStore(pinia).setCursor(near)
+    await flushPromises()
+
+    const g = geometry(app)
+    const model = modelOf(app)
+    expect(model.renderState).toBe('resident')
+
+    const expectedMask = eofByteSlots({
+      origin: near,
+      width: g.width,
+      stride: g.stride,
+      height: g.height,
+      size: PATTERN.length,
+    })
+    expect(Array.from(model.eofMask!)).toEqual(Array.from(expectedMask))
+    // A genuine straddle: some slots before EOF, some past.
+    expect(Array.from(model.eofMask!)).toContain(0)
+    expect(Array.from(model.eofMask!)).toContain(1)
+    // The packed data pass still holds the full canvas geometry.
+    expect(canvasSize(app)).toEqual([g.width * 8, g.height])
+    expect([frameOf(app)!.w, frameOf(app)!.h]).toEqual([g.width * 8, g.height])
+
+    // invert is a colour-only change (plan §4.3) — the EOF region is chrome and
+    // its slot map does not move.
+    usePreferencesStore(pinia).setBitmapInvert(true)
+    await flushPromises()
+    expect(Array.from(modelOf(app).eofMask!)).toEqual(Array.from(expectedMask))
+  })
+
+  it('has no EOF mask when the whole Extent sits before size', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(0) // span 256 ≪ 4096
+    await flushPromises()
+
+    expect(modelOf(app).renderState).toBe('resident')
+    expect(modelOf(app).eofMask).toBeNull()
+  })
+
+  it('whole-canvas EOF fill once the Origin sits at size (End clamps there)', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(1000)
+    await flushPromises()
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    await bitmapContainer(app).trigger('keydown', { code: 'End' })
+    await flushPromises()
+
+    expect(useBitmapStore(pinia).lockedOffset).toBe(PATTERN.length)
+    const mask = modelOf(app).eofMask!
+    expect(mask.length).toBeGreaterThan(0)
+    expect(Array.from(mask).every((v) => v === 1)).toBe(true)
+  })
+
+  it('a not-yet-resident span is whole-canvas pending, then repaints on arrival', async () => {
+    const app = mountApp()
+    const parked = new ParkedSource()
+    await openWithBitmap(parked, 'parked.bin')
+    useDocumentStore(pinia).setCursor(0)
+    await flushPromises()
+
+    expect(modelOf(app).renderState).toBe('pending')
+    expect(modelOf(app).salvagedRows).toBeNull() // per-row painting is dead-source only
+    expect(bitsOf(app).every((b) => b === 0)).toBe(true) // no packed pixels yet
+
+    parked.flushReads()
+    await flushPromises()
+    expect(modelOf(app).renderState).toBe('resident')
+    const g = geometry(app)
+    const expected = packBitmap(windowAt(0, g.span), g.packParams)
+    expect(bitsOf(app)).toEqual(Array.from(expected.bits))
+  })
+
+  it('clears the canvas when the span moves onto non-resident bytes — never holds the last frame', async () => {
+    const app = mountApp()
+    const parked = new ParkedSource()
+    await openWithBitmap(parked, 'parked.bin')
+    const store = useDocumentStore(pinia)
+
+    store.setCursor(0)
+    await flushPromises()
+    parked.flushReads()
+    await flushPromises()
+    expect(modelOf(app).renderState).toBe('resident')
+    const residentBits = bitsOf(app)
+    expect(residentBits.some((b) => b === 1)).toBe(true)
+
+    // Move onto a fresh, non-resident span: the frame must clear, not hold.
+    store.setCursor(2000)
+    await flushPromises()
+    expect(modelOf(app).renderState).toBe('pending')
+    expect(bitsOf(app).every((b) => b === 0)).toBe(true)
+    expect(bitsOf(app)).not.toEqual(residentBits)
+
+    parked.flushReads()
+    await flushPromises()
+    expect(modelOf(app).renderState).toBe('resident')
+  })
+
+  it('source-gone → a one-time per-row readSync sweep, resident rows packed, the rest blank, banner once', async () => {
+    const app = mountApp()
+    // 40 bytes resident = 10 rows at Width 4 / Stride 4; the read then rejects.
+    await openWithBitmap(new DeadSource(40), 'gone.bin')
+    useDocumentStore(pinia).setCursor(0)
+    await flushPromises()
+
+    expect(useDocumentStore(pinia).sourceHealth).toBe('gone')
+    const model = modelOf(app)
+    expect(model.renderState).toBe('dead-salvage')
+
+    const rows = model.salvagedRows!
+    const g = geometry(app)
+    expect(rows).toHaveLength(g.height)
+    expect(rows.slice(0, 10).every(Boolean)).toBe(true) // resident → packed
+    expect(rows.slice(10).every((r) => r === false)).toBe(true) // the rest → blank, permanently
+    expect(canvasSize(app)).toEqual([g.width * 8, g.height]) // still the full canvas
+  })
+
+  it('does not salvage per-row when the whole span is still resident on a dead source', async () => {
+    const app = mountApp()
+    // Everything the span needs is resident, so readSync serves it whole and the
+    // render is a normal packed frame — the salvage sweep never runs.
+    await openWithBitmap(new DeadSource(PATTERN.length), 'gone.bin')
+    useDocumentStore(pinia).setCursor(0)
+    await flushPromises()
+
+    expect(modelOf(app).renderState).toBe('resident')
+    expect(modelOf(app).salvagedRows).toBeNull()
+    const g = geometry(app)
+    const expected = packBitmap(windowAt(0, g.span), g.packParams)
+    expect(bitsOf(app)).toEqual(Array.from(expected.bits))
+  })
+
+  it('empty document → the "No Cursor yet" hint and no canvas, no fill states', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf([], 'empty.bin')), 'empty.bin')
+
+    expect(app.find('[data-field="bitmap-no-cursor"]').exists()).toBe(true)
+    expect(app.find('[data-field="bitmap-canvas"]').exists()).toBe(false)
+    expect(modelOf(app).renderState).toBe('no-origin')
+    expect(modelOf(app).eofMask).toBeNull()
   })
 })

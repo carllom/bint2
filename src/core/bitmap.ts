@@ -34,6 +34,13 @@ export interface RowByteSpanParams {
   height: number
 }
 
+export interface EofByteSlotsParams extends RowByteSpanParams {
+  /** The document byte offset the top-left byte-slot maps to (the Origin). */
+  origin: number
+  /** The document size in bytes. A slot at or past this is past EOF. */
+  size: number
+}
+
 export interface PackBitmapParams extends RowByteSpanParams {
   /** Swap foreground / background bit values only — no geometry change. */
   invert: boolean
@@ -62,6 +69,33 @@ export interface PackedBitmap {
  */
 export function rowByteSpan({ width, stride, height }: RowByteSpanParams): number {
   return stride * (height - 1) + width
+}
+
+/**
+ * The byte-slots of a `width × height` frame whose source offset lands **at or
+ * past `size`** — the past-EOF region the Bitmap Panel paints as a muted,
+ * `invert`-independent fill (plan-phase1.75 §4.10, #72). Pure geometry, the
+ * mirror of `packBitmap`'s own slot walk: slot `(row, bx)` reads source offset
+ * `origin + row·stride + bx`, and the trailing `stride − width` bytes of each
+ * row are skip-gap, never a slot — so EOF inside a gap is not represented here.
+ *
+ * Returns a row-major `Uint8Array` of length `width · height`: `1` where the
+ * slot is past EOF, `0` before it. `origin >= size` ⇒ every slot `1` (the whole
+ * canvas is EOF-fill, the "nudged off the end" state); a span wholly before
+ * `size` ⇒ every slot `0`.
+ *
+ * `packBitmap` stays EOF-agnostic (§4.7): this is the separate, size-aware pass.
+ */
+export function eofByteSlots({ origin, width, stride, height, size }: EofByteSlotsParams): Uint8Array {
+  const slots = new Uint8Array(width * height)
+  for (let row = 0; row < height; row++) {
+    for (let bx = 0; bx < width; bx++) {
+      if (origin + row * stride + bx >= size) {
+        slots[row * width + bx] = 1
+      }
+    }
+  }
+  return slots
 }
 
 /**

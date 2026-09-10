@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { packBitmap, rowByteSpan } from '../bitmap'
+import { eofByteSlots, packBitmap, rowByteSpan } from '../bitmap'
 
 // ── Prototype fixtures, reconstructed ───────────────────────────────────────
 // Lifted verbatim from src/core/__prototype__/bitmap-packing.prototype.html on
@@ -188,6 +188,55 @@ describe('packBitmap — bytesRead / bytesMissing at and past the end of the inp
     const out = packBitmap(new Uint8Array(7), { width: 2, stride: 5, height: 3, invert: false })
     expect(out.bytesRead + out.bytesMissing).toBe(6)
     expect([out.bytesRead, out.bytesMissing]).toEqual([4, 2])
+  })
+})
+
+describe('eofByteSlots — the past-EOF region (plan §4.10, #72)', () => {
+  it('is all zeroes when the whole span sits before size', () => {
+    const slots = eofByteSlots({ origin: 0, width: 4, stride: 4, height: 4, size: 1000 })
+    expect(slots).toHaveLength(16)
+    expect(Array.from(slots)).toEqual(new Array(16).fill(0))
+  })
+
+  it('is all ones when the Origin is at or past size — the whole canvas is EOF-fill', () => {
+    const atEof = eofByteSlots({ origin: 64, width: 4, stride: 4, height: 4, size: 64 })
+    expect(Array.from(atEof)).toEqual(new Array(16).fill(1))
+    const pastEof = eofByteSlots({ origin: 999, width: 2, stride: 2, height: 3, size: 64 })
+    expect(Array.from(pastEof)).toEqual(new Array(6).fill(1))
+  })
+
+  it('marks a row that straddles size per-byte: data before, EOF after', () => {
+    // size 6, origin 0, width 4, stride 4, height 3 → slot offsets 0..3, 4..7, 8..11.
+    const slots = eofByteSlots({ origin: 0, width: 4, stride: 4, height: 3, size: 6 })
+    expect(Array.from(slots)).toEqual([
+      0, 0, 0, 0, // row 0: offsets 0–3, all before EOF
+      0, 0, 1, 1, // row 1: offsets 4,5 before; 6,7 past
+      1, 1, 1, 1, // row 2: offsets 8–11, all past
+    ])
+  })
+
+  it('keys off the real source offset, so Stride > Width shifts the boundary', () => {
+    // width 2, stride 5: row r's slots are at origin + 5r + {0,1}; the 3-byte
+    // skip-gap holds no slots, so an EOF that falls in a gap changes nothing.
+    const slots = eofByteSlots({ origin: 10, width: 2, stride: 5, height: 4, size: 17 })
+    expect(Array.from(slots)).toEqual([
+      0, 0, // row 0: offsets 10,11
+      0, 0, // row 1: offsets 15,16  (12,13,14 are gap, size 17 falls in it)
+      1, 1, // row 2: offsets 20,21
+      1, 1, // row 3: offsets 25,26
+    ])
+  })
+
+  it('lines up slot-for-slot with packBitmap’s bytesMissing when the array is the live span', () => {
+    // A span read short at EOF: packBitmap counts the tail missing, eofByteSlots
+    // marks the same slots — the two passes agree on where the bytes stop.
+    const params = { width: 3, stride: 3, height: 4, invert: false }
+    const span = rowByteSpan(params) // 12
+    const size = 7
+    const packed = packBitmap(new Uint8Array(size), params)
+    const slots = eofByteSlots({ origin: 0, ...params, size })
+    expect(packed.bytesMissing).toBe(span - size) // 5
+    expect(Array.from(slots).filter((s) => s === 1)).toHaveLength(span - size)
   })
 })
 
