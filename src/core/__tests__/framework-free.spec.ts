@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 const coreDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const FORBIDDEN = /^(vue|pinia|vue-router|@vue\/.+|@vitejs\/.+)$/
+const FORBIDDEN = /^(vue|pinia|vue-router|reka-ui|@vue\/.+|@vitejs\/.+|reka-ui\/.+)$/
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
