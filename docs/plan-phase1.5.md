@@ -10,6 +10,13 @@ writing bytes back, no Web Worker (still evidence-gated, unchanged from
 > wayfinder ticket on map [#51](https://github.com/carllom/bint2/issues/51); the
 > tickets are authoritative where they carry more detail than this prose. What
 > remains is milestone execution (§9).
+>
+> **Superseded in part by phase 1.75** ([`plan-phase1.75.md`](plan-phase1.75.md),
+> map [#63](https://github.com/carllom/bint2/issues/63)): the Inspector's
+> `dock: 'bottom' | 'right'` model and its bottom-strip layout are gone — it is
+> now one collapsible **Panel** in a resizable right-hand **Sidebar** beside the
+> new **Bitmap**. See the "Superseded (phase 1.75)" notes in §2 and §3.1, and
+> [ADR-0010](adr/0010-the-inspector-lives-in-a-fixed-sidebar.md).
 
 ## 1. What phase 1.5 adds
 
@@ -58,7 +65,9 @@ serves every project from the shared `carllom.github.io` origin.
 > bottom/right choice. `collapsed` was renamed `sidebarCollapsed` (now
 > Sidebar-wide, not Inspector-only), and `sidebarWidth` / `inspectorOpen` /
 > `bitmapOpen` were added. A stored `dock` or `collapsed` key is ignored on load
-> and dropped on the next write — still no version stamp. See
+> and dropped on the next write — still no version stamp. The five `bitmap*`
+> render params were also added here. See
+> [`plan-phase1.75.md`](plan-phase1.75.md) §3.4,
 > [ADR-0010](adr/0010-the-inspector-lives-in-a-fixed-sidebar.md) and map
 > [#63](https://github.com/carllom/bint2/issues/63)
 > ([#68](https://github.com/carllom/bint2/issues/68)).
@@ -89,7 +98,7 @@ serves every project from the shared `carllom.github.io` origin.
 > independently collapsible **Panels** (the Inspector, then the Bitmap). What
 > carries over unchanged: the row groups (§3.2), the per-row copy buttons
 > (§3.6), and the `hex` toggle (§3.3) — the last now in a control strip at the
-> top of the Panel's content. See
+> top of the Panel's content. See [`plan-phase1.75.md`](plan-phase1.75.md) §3,
 > [ADR-0010](adr/0010-the-inspector-lives-in-a-fixed-sidebar.md) and map
 > [#63](https://github.com/carllom/bint2/issues/63).
 
