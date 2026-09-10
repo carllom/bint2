@@ -111,3 +111,29 @@ grid, which would render the document itself as elements rather than bytes; the
 inspector leaves the document's rendering byte-oriented, and leaves glyphs to
 the char column.
 _Avoid_: data panel, decoder, preview
+
+**Bitmap**:
+A 1-bit-per-pixel monochrome rendering of a contiguous run of the document's
+bytes: each byte is eight horizontal pixels, most-significant bit leftmost, a
+set bit painting the foreground. The bytes are the pixels — nothing is decoded
+from them.
+_Avoid_: image view, pixel view, raster, preview
+
+**Origin**:
+The document byte offset the Bitmap's top-left pixel maps to. It either follows
+the Cursor, tracking it byte-for-byte as it moves, or is locked — frozen at a
+committed offset while the Cursor moves on independently.
+_Avoid_: start offset, anchor, base address
+
+**Width**:
+The number of document bytes the Bitmap draws per row, each contributing eight
+pixels. Distinct from an Element's byte-width: a row length in the rendering,
+not the size of a decoded value.
+_Avoid_: row size, columns, bytes per row
+
+**Stride**:
+The number of document bytes the Bitmap advances from one row's Origin to the
+next. Equal to Width by default; when larger, the extra trailing bytes of each
+row are skipped, so one column of a wider repeating structure can be viewed in
+isolation.
+_Avoid_: pitch, step, row gap
