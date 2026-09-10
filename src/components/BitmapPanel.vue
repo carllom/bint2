@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
-import { packBitmap, rowByteSpan, toHex } from '@/core'
+import { eofByteSlots, packBitmap, rowByteSpan, toHex } from '@/core'
 import type { PackedBitmap } from '@/core'
 import { useBytesAt } from '@/composables/useBytesAt'
 import { useBitmapStore } from '@/stores/bitmap'
@@ -14,12 +14,29 @@ import {
 } from '@/stores/preferences'
 
 // The Bitmap Panel (CONTEXT.md, plan-phase1.75.md §4). #81 shipped Follow-mode
-// render; #82 (this ticket) adds the follow/lock **Origin** state machine
-// (ADR-0008): `L` / the header toggle freezes the Origin at the Cursor, the
-// section's arrow / page / Home-End keys nudge a locked Origin, and the mode +
-// offset live in {@link useBitmapStore} — session-only, never persisted, and
-// surviving the section's `unmount-on-hide`. The honest EOF-fill / pending /
-// dead-source overlay passes are #83.
+// render; #82 added the follow/lock **Origin** state machine (ADR-0008): `L` /
+// the header toggle freezes the Origin at the Cursor, the section's arrow /
+// page / Home-End keys nudge a locked Origin, and the mode + offset live in
+// {@link useBitmapStore} — session-only, never persisted, and surviving the
+// section's `unmount-on-hide`.
+//
+// #83 (this ticket) adds the honest treatments for every "no pixel here" region
+// (plan §4.10, #72). The canvas is **always** `Height` rows × `Width·8` px,
+// whatever fraction of the span is available. `packBitmap` stays pure (#79) — it
+// packs whatever bytes it is handed — and the component paints, on top of the
+// packed bits:
+//   - **Past EOF** (source offset ≥ `size`): a muted, theme-toned fill,
+//     `invert`-independent (chrome, not data) — computed per byte-slot by
+//     {@link eofByteSlots}. A row straddling `size` is packed data before it and
+//     EOF-fill after it.
+//   - **Not-yet-resident** (`useBytesAt` returns `null` — always the whole span,
+//     residency is all-or-nothing): plain background, no spinner; a span change
+//     onto non-resident bytes clears the canvas for that frame rather than
+//     holding the stale one; it repaints when the bytes arrive (ADR-0004).
+//   - **Dead source** (`source-gone`): a one-time per-row `readSync` salvage
+//     sweep — resident rows packed, the rest permanently plain background — plus
+//     the banner {@link useBytesAt} already raises. Per-row painting happens
+//     *only* in this terminal case, in both Follow and Lock.
 //
 // The render is `packBitmap` (the pure #79 transform) of the bytes at the
 // Origin, drawn to a `<canvas>` via `putImageData` and upscaled by an **integer**
@@ -36,9 +53,6 @@ import {
 // plan §3.6): the Width / Stride keys are bound on it and armed only while focus
 // is *within* the content, never on the accordion trigger. `unmount-on-hide`
 // means a closed section has no container and the keys are inert.
-//
-// For this ticket, bytes past the input or not yet resident just render as plain
-// background — the full treatment is #83; the banner-on-`source-gone` still ships.
 
 const documentStore = useDocumentStore()
 const preferences = usePreferencesStore()
@@ -112,17 +126,21 @@ const span = computed(() => rowByteSpan({ width: width.value, stride: stride.val
 
 // The byte run at the Origin. `readSync` serves it in-frame when the covering
 // pages are resident — the Follow-mode hot path, where consecutive spans overlap
-// almost entirely; otherwise the guarded async `read` fills it in. `null` while
-// pending (rendered as plain background for this ticket).
+// almost entirely; otherwise the guarded async `read` fills it in. Residency is
+// **all-or-nothing** (plan §4.10): `null` until the whole span is resident, then
+// a `Uint8Array` — short when it crosses `size`. A span change nulls it
+// synchronously, so a stale frame is cleared, never held.
 const bytes = useBytesAt(
   computed(() => documentStore.source),
   origin,
   span,
 )
 
-/** The packed 1-bpp frame, or `null` with no Cursor. `packBitmap` is pure and
- *  EOF-agnostic — missing bytes come back as background bits; the honest
- *  past-EOF / pending fills are #83. */
+/** The packed 1-bpp frame, or `null` with no Origin. `packBitmap` is pure and
+ *  EOF-agnostic (#79) — missing bytes come back as background bits; the honest
+ *  past-EOF / pending / dead-source treatments are painted over it below. Kept
+ *  as the canvas's intrinsic geometry (`w` = `Width·8`, `h` = `Height`, fixed
+ *  regardless of availability) and the test seam for the packed bits. */
 const frame = computed<PackedBitmap | null>(() => {
   if (origin.value === null) {
     return null
@@ -132,6 +150,101 @@ const frame = computed<PackedBitmap | null>(() => {
     stride: stride.value,
     height: height.value,
     invert: invert.value,
+  })
+})
+
+// ── The "no pixel here" render model (plan §4.10, #72) ────────────────────
+/**
+ * Which treatment the frame gets, before the past-EOF overlay:
+ * - `no-origin`  — nothing clicked / no locked offset; no canvas at all.
+ * - `pending`    — the span is not yet resident: the *whole* canvas is plain
+ *   background (residency is all-or-nothing, plan §4.10). Repaints on arrival.
+ * - `dead-salvage` — `source-gone` and the span never went resident: the
+ *   one-time per-row `readSync` sweep below.
+ * - `resident`   — a `Uint8Array` is in hand (possibly short at EOF): the
+ *   packed `frame`.
+ */
+type BitmapRenderState = 'no-origin' | 'pending' | 'dead-salvage' | 'resident'
+
+const renderState = computed<BitmapRenderState>(() => {
+  if (origin.value === null) {
+    return 'no-origin'
+  }
+  if (bytes.value !== null) {
+    return 'resident'
+  }
+  return documentStore.sourceHealth === 'gone' ? 'dead-salvage' : 'pending'
+})
+
+/**
+ * Dead-source salvage (plan §4.10, ADR-0004): the source is a dead source and
+ * the live span never went resident, so pack whatever rows `readSync` can still
+ * serve from already-resident pages and leave the rest plain background —
+ * **permanently**, because a dead source's resident set never grows. Per-row
+ * packing happens *only* here, in both Follow and Lock. Recomputes if a locked
+ * Origin is nudged, sweeping the new rows.
+ */
+const salvage = computed<{ bits: Uint8Array; rows: boolean[] } | null>(() => {
+  if (renderState.value !== 'dead-salvage') {
+    return null
+  }
+  const src = documentStore.source
+  const o0 = origin.value
+  const w = width.value * 8
+  const bits = new Uint8Array(w * height.value)
+  const rows: boolean[] = []
+  for (let row = 0; row < height.value; row++) {
+    const rowOffset = (o0 ?? 0) + row * stride.value
+    const want = Math.max(0, Math.min(width.value, documentStore.fileSize - rowOffset))
+    const hit = src !== null && want > 0 ? src.readSync(rowOffset, want) : null
+    rows.push(hit !== null)
+    if (hit !== null) {
+      const packed = packBitmap(hit, {
+        width: width.value,
+        stride: stride.value,
+        height: 1,
+        invert: invert.value,
+      })
+      bits.set(packed.bits, row * w)
+    }
+  }
+  return { bits, rows }
+})
+
+/** Per-row residency from the last salvage sweep — `true` where the row was
+ *  packed and painted, `false` where it stays background. `null` outside the
+ *  dead-source case. Exposed for the shell test (the pixels are not observable
+ *  in happy-dom). */
+const salvagedRows = computed<boolean[] | null>(() => salvage.value?.rows ?? null)
+
+/** The bits to blit *before* the past-EOF overlay. `null` ⇒ the whole canvas is
+ *  plain background (pending, or no origin) — `invert` does not reach it. */
+const renderBits = computed<Uint8Array | null>(() => {
+  switch (renderState.value) {
+    case 'resident':
+      return frame.value?.bits ?? null
+    case 'dead-salvage':
+      return salvage.value?.bits ?? null
+    default:
+      return null
+  }
+})
+
+/** The past-EOF byte-slots (`1` = at/past `size`), row-major `Width × Height`;
+ *  `null` when there are none — no Origin, or the whole Extent sits before
+ *  `size` (the Follow-mode common case: skip the allocation and the scan on the
+ *  hot path). Not applied while `pending` either — that frame is wholly plain
+ *  background. */
+const eofMask = computed<Uint8Array | null>(() => {
+  if (origin.value === null || origin.value + span.value <= documentStore.fileSize) {
+    return null
+  }
+  return eofByteSlots({
+    origin: origin.value,
+    width: width.value,
+    stride: stride.value,
+    height: height.value,
+    size: documentStore.fileSize,
   })
 })
 
@@ -151,9 +264,11 @@ const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 
 type RGB = [number, number, number]
 // Only reached when `getComputedStyle` can't resolve the tokens (a detached or
-// test DOM); mirrors the dark `--color-fg` / `--color-bg` in `src/assets/main.css`.
+// test DOM); mirrors the dark `--color-fg` / `--color-bg` / `--color-bitmap-eof`
+// in `src/assets/main.css`.
 const FG_FALLBACK: RGB = [212, 212, 212]
 const BG_FALLBACK: RGB = [30, 30, 30]
+const EOF_FALLBACK: RGB = [58, 58, 58]
 
 /** Parse a `#rgb` / `#rrggbb` custom-property value to an RGB triple. The theme
  *  tokens are always hex (`src/assets/main.css`); anything else → `null`. */
@@ -171,29 +286,41 @@ function parseColor(raw: string): RGB | null {
   ]
 }
 
-/** Foreground = the text colour, background = the surface (plan §4.3, ADR-0005).
- *  Read live from the container's resolved custom properties, so a
- *  `prefers-color-scheme` flip is picked up on the next `paint()` (the
- *  `matchMedia` listener below forces one). Falls back to the dark palette. */
-function themeColors(): { fg: RGB; bg: RGB } {
+/** Foreground = the text colour, background = the surface (plan §4.3, ADR-0005);
+ *  `eof` = the muted past-EOF fill (plan §4.10). Read live from the container's
+ *  resolved custom properties, so a `prefers-color-scheme` flip is picked up on
+ *  the next `paint()` (the `matchMedia` listener below forces one). Falls back to
+ *  the dark palette. */
+function themeColors(): { fg: RGB; bg: RGB; eof: RGB } {
   const el = root.value
   if (el === null) {
-    return { fg: FG_FALLBACK, bg: BG_FALLBACK }
+    return { fg: FG_FALLBACK, bg: BG_FALLBACK, eof: EOF_FALLBACK }
   }
   const cs = getComputedStyle(el)
   return {
     fg: parseColor(cs.getPropertyValue('--color-fg')) ?? FG_FALLBACK,
     bg: parseColor(cs.getPropertyValue('--color-bg')) ?? BG_FALLBACK,
+    eof: parseColor(cs.getPropertyValue('--color-bitmap-eof')) ?? EOF_FALLBACK,
   }
 }
 
-/** Draw the current frame. A bit value of `1` is always the foreground colour —
- *  `packBitmap` has already swapped the bit values for `invert`, so this mapping
- *  never branches on it. No-op when there is no 2-D context (a test DOM). */
+/**
+ * Draw the current frame (plan §4.10). Two passes onto one `ImageData`:
+ *
+ * 1. **Base** — `renderBits` mapped `1` → foreground, `0` → background.
+ *    `packBitmap` has already swapped the bit values for `invert`, so this never
+ *    branches on it. `renderBits === null` (pending / no bits) paints the whole
+ *    canvas plain background — `invert` does not reach it.
+ * 2. **Past-EOF overlay** — every byte-slot at/past `size` (from `eofByteSlots`)
+ *    is repainted the muted `eof` fill, all eight of its pixels, *ignoring* the
+ *    base pass and `invert`: it is chrome, not data. Skipped entirely while
+ *    `pending`, so that frame stays wholly plain background.
+ *
+ * No-op when there is no 2-D context (a test DOM) or no Origin.
+ */
 function paint(): void {
   const cv = canvas.value
-  const f = frame.value
-  if (cv === null || f === null) {
+  if (cv === null || origin.value === null) {
     return
   }
   const ctx = cv.getContext('2d')
@@ -201,21 +328,37 @@ function paint(): void {
     return
   }
   ctx.imageSmoothingEnabled = false
-  const { fg, bg } = themeColors()
-  const img = ctx.createImageData(f.w, f.h)
-  for (let i = 0; i < f.bits.length; i++) {
-    const on = f.bits[i] === 1
-    const o = i * 4
-    img.data[o] = on ? fg[0] : bg[0]
-    img.data[o + 1] = on ? fg[1] : bg[1]
-    img.data[o + 2] = on ? fg[2] : bg[2]
-    img.data[o + 3] = 255
+  const { fg, bg, eof } = themeColors()
+  const w = width.value * 8
+  const h = height.value
+  const bits = renderBits.value
+  const mask = renderState.value === 'pending' ? null : eofMask.value
+  const img = ctx.createImageData(w, h)
+  for (let row = 0; row < h; row++) {
+    for (let px = 0; px < w; px++) {
+      const i = row * w + px
+      let c: RGB
+      if (mask !== null && mask[row * width.value + (px >> 3)] === 1) {
+        c = eof
+      } else if (bits === null) {
+        c = bg
+      } else {
+        c = bits[i] === 1 ? fg : bg
+      }
+      const o = i * 4
+      img.data[o] = c[0]
+      img.data[o + 1] = c[1]
+      img.data[o + 2] = c[2]
+      img.data[o + 3] = 255
+    }
   }
   ctx.putImageData(img, 0, 0)
 }
 
 // Repaint after the DOM has the new intrinsic canvas size (`flush: 'post'`).
-watch(frame, () => paint(), { flush: 'post' })
+// `renderBits` covers the packed / salvaged / pending bits, `eofMask` the
+// past-EOF region, `renderState` the transitions where neither identity changes.
+watch([renderBits, eofMask, renderState], () => paint(), { flush: 'post' })
 
 // A live OS light/dark switch restyles the rest of the app through CSS, but the
 // canvas is painted pixels — repaint it so the theme colours follow (plan §4.3).
@@ -351,11 +494,13 @@ function focusSelf(event: PointerEvent): void {
   ;(event.currentTarget as HTMLElement).focus()
 }
 
-// Test seam — the packed frame only, because its `bits` are the one thing not
-// observable from the DOM (happy-dom gives `<canvas>` no 2-D context, plan §7).
-// Geometry, Zoom, invert and the Origin are all read from the controls / canvas
-// attributes / the store in the shell test.
-defineExpose({ frame })
+// Test seam — the packed frame plus the #83 render model, because none of it is
+// observable from the DOM (happy-dom gives `<canvas>` no 2-D context, plan §7):
+// `renderState` (pending / dead-salvage / resident / no-origin), `eofMask` (the
+// past-EOF byte-slots), and `salvagedRows` (which rows the dead-source sweep
+// filled). Geometry, Zoom, invert and the Origin are read from the controls /
+// canvas attributes / the store in the shell test.
+defineExpose({ frame, renderState, eofMask, salvagedRows })
 </script>
 
 <template>
