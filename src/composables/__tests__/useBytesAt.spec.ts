@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { Pinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { effectScope, ref, shallowRef } from 'vue'
-import type { EffectScope, Ref } from 'vue'
+import type { EffectScope, MaybeRefOrGetter, Ref } from 'vue'
 import { ByteSourceError } from '@/core'
 import type { ByteSource } from '@/core'
 import { useDocumentStore } from '@/stores/document'
@@ -78,7 +78,7 @@ afterEach(() => {
 function setup(
   source: ByteSource | null,
   offset: number | null,
-  length: number,
+  length: MaybeRefOrGetter<number>,
 ): { run: Ref<Uint8Array | null>; sourceRef: Ref<ByteSource | null>; offsetRef: Ref<number | null> } {
   const sourceRef = shallowRef(source)
   const offsetRef = ref(offset) as Ref<number | null>
@@ -182,6 +182,59 @@ describe('useBytesAt', () => {
     const store = useDocumentStore(pinia)
 
     offsetRef.value = 1
+    source.rejectNext(new ByteSourceError('source-gone'))
+    await flush()
+    expect(store.sourceHealth).toBe('ok')
+  })
+})
+
+// The Bitmap reads a span that changes as Width / Stride / Height change
+// (plan-phase1.75 §4.6, #66): `length` is a MaybeRefOrGetter, folded into the
+// watch source and the staleness guard so a stale span cannot clobber a newer.
+describe('useBytesAt — a reactive length', () => {
+  it('re-reads at the new span when the length grows', async () => {
+    const length = ref(4)
+    const { run } = setup(new SyncSource(ASC), 0, length)
+    expect([...run.value!]).toEqual([0, 1, 2, 3])
+
+    length.value = 8
+    await flush()
+    expect([...run.value!]).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  })
+
+  it('accepts a getter, tracking whatever it reads', async () => {
+    const width = ref(2)
+    const { run } = setup(new SyncSource(ASC), 0, () => width.value * 3)
+    expect([...run.value!]).toEqual([0, 1, 2, 3, 4, 5])
+
+    width.value = 3
+    await flush()
+    expect([...run.value!]).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+  })
+
+  it('drops a stale span’s late arrival — the newer, shorter span wins', async () => {
+    const source = new DeferredSource()
+    const length = ref(8)
+    const { run } = setup(source, 0, length)
+    expect(run.value).toBeNull()
+
+    length.value = 4 // a newer read is issued for the shorter span
+    source.resolveNext([9, 9, 9, 9, 9, 9, 9, 9]) // resolves the *first* read (length 8)
+    await flush()
+    expect(run.value).toBeNull() // stale — dropped
+
+    source.resolveNext([1, 2, 3, 4]) // the length-4 read
+    await flush()
+    expect([...run.value!]).toEqual([1, 2, 3, 4])
+  })
+
+  it('ignores a source-gone rejection for a span the caller has since changed', async () => {
+    const source = new DeferredSource()
+    const length = ref(8)
+    setup(source, 0, length)
+    const store = useDocumentStore(pinia)
+
+    length.value = 16
     source.rejectNext(new ByteSourceError('source-gone'))
     await flush()
     expect(store.sourceHealth).toBe('ok')

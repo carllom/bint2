@@ -22,6 +22,16 @@ import type { CodePage } from '@/core'
  */
 export const PREFERENCES_STORAGE_KEY = 'bint2:preferences'
 
+/**
+ * The Bitmap render-param bounds (plan-phase1.75 §4.2). Exported so the one place
+ * that validates a stored value and the one place that clamps a live edit
+ * (`BitmapPanel.vue`) share a single source of truth.
+ */
+export const BITMAP_HEIGHT_MIN = 32
+export const BITMAP_HEIGHT_MAX = 4096
+export const BITMAP_ZOOM_MIN = 1
+export const BITMAP_ZOOM_MAX = 3
+
 /** The view-wide byte order every multi-byte numeric decode obeys (#55, ADR-0007). */
 export type ByteOrder = 'le' | 'be'
 
@@ -161,8 +171,10 @@ function loadPreferences(): Preferences {
         : DEFAULTS.bitmapStrideOffset,
     // An integer in the band, else `null` — which doubles as "measure the
     // section body once at first open" (plan §4.2) and the default.
-    bitmapHeight: isIntInRange(stored.bitmapHeight, 32, 4096) ? stored.bitmapHeight : null,
-    bitmapZoom: intInRange(stored.bitmapZoom, 1, 3, DEFAULTS.bitmapZoom),
+    bitmapHeight: isIntInRange(stored.bitmapHeight, BITMAP_HEIGHT_MIN, BITMAP_HEIGHT_MAX)
+      ? stored.bitmapHeight
+      : null,
+    bitmapZoom: intInRange(stored.bitmapZoom, BITMAP_ZOOM_MIN, BITMAP_ZOOM_MAX, DEFAULTS.bitmapZoom),
     bitmapInvert: isBoolean(stored.bitmapInvert) ? stored.bitmapInvert : DEFAULTS.bitmapInvert,
   }
 }
