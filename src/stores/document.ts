@@ -98,6 +98,15 @@ export const useDocumentStore = defineStore('document', () => {
   // observes the reads that drive this; the store just holds and resets it.
   const sourceHealth = shallowRef<SourceHealth>('ok')
 
+  // A reveal request from a component that moves the Cursor but cannot see the
+  // Viewport metrics — the Bitmap's click-to-cursor (plan-phase1.75 §4.9). The
+  // Cursor move itself goes through `setCursor` / `extendSelectionTo` like any
+  // other (ADR-0003); this is the separate "and scroll that row into view"
+  // signal. `HexViewer` owns the metrics and the minimal-scroll math
+  // (`revealOffset`) and watches this; the store only carries the ask. A fresh
+  // object per call, so two reveals of the same offset are still distinct.
+  const revealRequest = shallowRef<{ offset: number } | null>(null)
+
   // A copy message reports on the Selection it was made from; the moment that
   // Selection moves, the message is stale. A `sticky` message — the byte-order
   // flip (#55) — has no such tie and rides straight through (plan §4.4).
@@ -122,6 +131,20 @@ export const useDocumentStore = defineStore('document', () => {
     selection.value = null
     actionStatus.value = null
     sourceHealth.value = 'ok'
+    revealRequest.value = null
+  }
+
+  /**
+   * Ask the Viewport to scroll `offset`'s row minimally into view (plan §4.9).
+   * The Bitmap's pixel click uses this after driving the Cursor, so a click on
+   * off-screen pixels takes the reader to those bytes — the same intent a
+   * keyboard cursor move has. A no-op with no document open.
+   */
+  function requestReveal(offset: number): void {
+    if (source.value === null || fileSize.value === 0) {
+      return
+    }
+    revealRequest.value = { offset: clampByte(offset) }
   }
 
   /**
@@ -371,9 +394,11 @@ export const useDocumentStore = defineStore('document', () => {
     selection,
     actionStatus,
     sourceHealth,
+    revealRequest,
     open,
     scrollTo,
     gotoOffset,
+    requestReveal,
     setBytesPerRow,
     setCursor,
     extendSelectionTo,

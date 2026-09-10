@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { rowByteSpan } from '@/core'
 import { useDocumentStore } from '@/stores/document'
+import { usePreferencesStore } from '@/stores/preferences'
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi)
 
@@ -34,7 +36,18 @@ export const useBitmapStore = defineStore('bitmap', () => {
    */
   const lockedOffset = ref<number | null>(null)
 
+  /**
+   * The Bitmap's effective render height in rows. `bitmapHeight` may be `null`
+   * (→ measured by `BitmapPanel` at first open), so the Panel is the only place
+   * that knows the resolved value; it writes it here so the Extent marker
+   * (plan §4.8) can compute the run's end without re-deriving that measurement.
+   * `1` until the Panel first reports — harmless, the marker only renders while
+   * locked *and* the Panel is mounted.
+   */
+  const renderHeight = ref(1)
+
   const documentStore = useDocumentStore()
+  const preferences = usePreferencesStore()
 
   /**
    * Opening another document is the universal reset (plan §6, document store
@@ -97,5 +110,39 @@ export const useBitmapStore = defineStore('bitmap', () => {
     lockedOffset.value = clamp(to, 0, documentStore.fileSize)
   }
 
-  return { originLocked, lockedOffset, lockOrigin, followCursor, nudgeOrigin, jumpOrigin }
+  /** `BitmapPanel` reports its resolved render height (rows) here — see
+   *  {@link renderHeight}. */
+  function setRenderHeight(rows: number): void {
+    renderHeight.value = Math.max(1, Math.trunc(rows))
+  }
+
+  /**
+   * The locked **Extent** as a half-open byte range `[start, end)` —
+   * `[Origin, Origin + Stride·(Height−1) + Width)` (CONTEXT.md "Extent",
+   * plan §4.8). `null` unless the Origin is locked; Follow mode shows nothing —
+   * the linkage there *is* the Cursor. Transient view chrome, not an
+   * Annotation: the hex grid's passive gutter overlay reads this (ADR-0011).
+   */
+  const extent = computed<{ start: number; end: number } | null>(() => {
+    if (!originLocked.value || lockedOffset.value === null) {
+      return null
+    }
+    const span = rowByteSpan({
+      width: preferences.bitmapWidth,
+      stride: preferences.bitmapStride,
+      height: renderHeight.value,
+    })
+    return { start: lockedOffset.value, end: lockedOffset.value + span }
+  })
+
+  return {
+    originLocked,
+    lockedOffset,
+    extent,
+    lockOrigin,
+    followCursor,
+    nudgeOrigin,
+    jumpOrigin,
+    setRenderHeight,
+  }
 })

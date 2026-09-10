@@ -551,3 +551,38 @@ describe('sourceHealth — the dead-source banner state (#26, ADR-0004)', () => 
     expect(store.sourceHealth).toBe('ok')
   })
 })
+
+describe('requestReveal — the Bitmap click-to-cursor reveal signal (plan §4.9)', () => {
+  it('is null until a reveal is asked for', () => {
+    expect(useDocumentStore().revealRequest).toBeNull()
+  })
+
+  it('carries the (byte-clamped) offset in a fresh object each call — a repeat is still a distinct trigger', () => {
+    const store = useDocumentStore()
+    store.open(sourceOfSize(4096), 'a.bin')
+
+    store.requestReveal(1000)
+    expect(store.revealRequest).toEqual({ offset: 1000 })
+    const first = store.revealRequest
+
+    store.requestReveal(1000)
+    expect(store.revealRequest).toEqual({ offset: 1000 })
+    expect(store.revealRequest).not.toBe(first) // a new reference, so the watcher re-fires
+
+    store.requestReveal(999_999) // clamped to the last real byte
+    expect(store.revealRequest!.offset).toBe(4095)
+  })
+
+  it('is inert with no document open, and resets when one opens', () => {
+    const store = useDocumentStore()
+    store.requestReveal(10)
+    expect(store.revealRequest).toBeNull()
+
+    store.open(sourceOfSize(4096), 'a.bin')
+    store.requestReveal(10)
+    expect(store.revealRequest).not.toBeNull()
+
+    store.open(sourceOfSize(2048), 'b.bin')
+    expect(store.revealRequest).toBeNull()
+  })
+})

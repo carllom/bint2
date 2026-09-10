@@ -827,3 +827,209 @@ describe('the Bitmap Panel — EOF / pending / dead-source rendering (plan §4.1
     expect(modelOf(app).eofMask).toBeNull()
   })
 })
+
+// ── Bitmap <-> hex linkage: the Extent marker + click-to-cursor (plan
+//    §4.8 / §4.9, ADR-0011, #84) ────────────────────────────────────────────
+// HomeView whole, so the Bitmap Panel (Sidebar) and the passive Extent overlay
+// (inside `.hex-viewer__row-area`) are both live. happy-dom leaves HexViewer on
+// its pre-measurement fallbacks — rowPx 18, viewportPx 720 → 40 rows fit — and
+// gives `<canvas>` a 0-size box, so the canvas rect is stubbed for the click math.
+
+const extentMarker = (app: VueWrapper) => app.find('.hex-viewer__row-area .extent-marker')
+const extentBand = (app: VueWrapper) => app.find('[data-field="extent-band"]')
+const extentChevron = (app: VueWrapper) => app.find('[data-field="extent-chevron"]')
+
+/** Give the Bitmap canvas a concrete box so `bitmapOffsetAt` has real coords.
+ *  The canvas is `Width*8 x Height` intrinsic px, drawn at `Zoom` — default
+ *  4*8 x 64 at Zoom 2 -> 64 x 128 CSS px, top-left at the origin. */
+function stubCanvasRect(app: VueWrapper, zoom = 2): void {
+  const el = app.find('[data-field="bitmap-canvas"]').element as HTMLElement
+  const width = 4 * 8 * zoom
+  const height = 64 * zoom
+  Object.defineProperty(el, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      left: 0,
+      top: 0,
+      right: width,
+      bottom: height,
+      width,
+      height,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    }),
+  })
+}
+
+/** Client point for intrinsic pixel (col, row) at the given Zoom. */
+const pixelPoint = (col: number, row: number, zoom = 2) => ({
+  clientX: col * zoom + 1,
+  clientY: row * zoom + 1,
+})
+
+async function lockAt(app: VueWrapper, offset: number): Promise<void> {
+  useDocumentStore(pinia).setCursor(offset)
+  await flushPromises()
+  await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+  await flushPromises()
+}
+
+describe('the Extent marker — a locked run in the hex gutter (plan §4.8, ADR-0011)', () => {
+  it('appears only while locked AND the Panel is mounted; gone in Follow; returns on reopen', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(0)
+    await flushPromises()
+
+    expect(extentMarker(app).exists()).toBe(false) // Follow — the linkage is the Cursor
+
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    await flushPromises()
+    expect(extentBand(app).exists()).toBe(true)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' }) // Follow again
+    await flushPromises()
+    expect(extentMarker(app).exists()).toBe(false)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' }) // lock again
+    await flushPromises()
+    expect(extentBand(app).exists()).toBe(true)
+
+    await toggleBitmapSection(app) // close — BitmapPanel unmounts
+    expect(app.findComponent(BitmapPanel).exists()).toBe(false)
+    expect(extentMarker(app).exists()).toBe(false)
+
+    await toggleBitmapSection(app) // reopen — the still-held lock brings it back
+    expect(useBitmapStore(pinia).originLocked).toBe(true)
+    expect(extentBand(app).exists()).toBe(true)
+  })
+
+  it('is a contiguous hull [Origin, Origin + Stride*(Height-1) + Width), positioned from the row height', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    usePreferencesStore(pinia).setBitmapHeight(48)
+    usePreferencesStore(pinia).setBitmapStrideOffset(4) // Stride 8 — a gappy run, solid hull
+    await flushPromises()
+    await lockAt(app, 16) // row 1 at 16 bpr
+
+    const span = rowByteSpan({ width: 4, stride: 8, height: 48 }) // 8*47 + 4 = 380
+    expect(useBitmapStore(pinia).extent).toEqual({ start: 16, end: 16 + span })
+
+    // firstRow 1, lastRow = floor((16 + 380 - 1) / 16) = 24 → 24 rows tall, one down.
+    expect(extentBand(app).attributes('style')).toContain('top: 18px')
+    expect(extentBand(app).attributes('style')).toContain(`height: ${24 * 18}px`)
+  })
+
+  it('shows an off-screen chevron that scrolls the grid to the Extent first row', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    const store = useDocumentStore(pinia)
+    await lockAt(app, 100 * 16) // row 100 — far below the 40 rows on screen
+
+    expect(store.topByteOffset).toBe(0)
+    expect(extentBand(app).exists()).toBe(false)
+    expect(extentChevron(app).text()).toBe('▼')
+
+    await extentChevron(app).trigger('click')
+    expect(store.topByteOffset).toBe(100 * 16)
+  })
+
+  it('is decorative — aria-hidden, no live region — and a sibling of the grid, not a wrapper', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    await lockAt(app, 0)
+
+    expect(extentMarker(app).attributes('aria-hidden')).toBe('true')
+    expect(extentMarker(app).find('[aria-live]').exists()).toBe(false)
+    // `pointer-events: none` on the band keeps byte clicks landing on the cells
+    // beneath — structurally, the overlay sits beside the grid, not around it.
+    expect(app.find('.hex-viewer__row-area > .extent-marker').exists()).toBe(true)
+    expect(extentMarker(app).find('.hex-viewer__grid').exists()).toBe(false)
+  })
+})
+
+describe('click-to-cursor — a Bitmap pixel drives the Cursor (plan §4.9)', () => {
+  it('plain click → setCursor(Origin + row*Stride + floor(col/8)) then a reveal request', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    const store = useDocumentStore(pinia)
+    store.setCursor(100)
+    await flushPromises()
+    stubCanvasRect(app)
+
+    // intrinsic pixel (col 1, row 3) → byte 0 of row 3 → 100 + 3*4 + 0.
+    await app
+      .find('[data-field="bitmap-canvas"]')
+      .trigger('pointerdown', { button: 0, ...pixelPoint(1, 3) })
+
+    expect(store.selection).toEqual({ anchor: 112, focus: 112 })
+    expect(store.revealRequest?.offset).toBe(112)
+  })
+
+  it('Shift+click → extendSelectionTo(target)', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    const store = useDocumentStore(pinia)
+    store.setCursor(100)
+    await flushPromises()
+    stubCanvasRect(app)
+
+    await app
+      .find('[data-field="bitmap-canvas"]')
+      .trigger('pointerdown', { button: 0, shiftKey: true, ...pixelPoint(9, 3) }) // col 9 → byte 1 → 113
+
+    expect(store.selection).toEqual({ anchor: 100, focus: 113 })
+  })
+
+  it('works while locked — the Cursor jumps, the Origin and the render do not', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    const store = useDocumentStore(pinia)
+    await lockAt(app, 100)
+    const lockedBits = bitsOf(app)
+    stubCanvasRect(app)
+
+    await app
+      .find('[data-field="bitmap-canvas"]')
+      .trigger('pointerdown', { button: 0, ...pixelPoint(1, 3) }) // 100 + 12 → 112, from the locked Origin
+
+    expect(store.selection?.focus).toBe(112)
+    expect(useBitmapStore(pinia).lockedOffset).toBe(100)
+    expect(bitsOf(app)).toEqual(lockedBits)
+  })
+
+  it('is inert past EOF — no Cursor move, no reveal', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    const store = useDocumentStore(pinia)
+    store.setCursor(PATTERN.length - 6) // 4090; row 2 byte 0 → 4098 ≥ size
+    await flushPromises()
+    stubCanvasRect(app)
+
+    await app
+      .find('[data-field="bitmap-canvas"]')
+      .trigger('pointerdown', { button: 0, ...pixelPoint(1, 2) })
+
+    expect(store.selection?.focus).toBe(PATTERN.length - 6)
+    expect(store.revealRequest).toBeNull()
+  })
+
+  it('is inert on non-resident pixels', async () => {
+    const app = mountApp()
+    const parked = new ParkedSource() // readSync always misses
+    await openWithBitmap(parked, 'parked.bin')
+    const store = useDocumentStore(pinia)
+    store.setCursor(0)
+    await flushPromises()
+    expect(modelOf(app).renderState).toBe('pending')
+    stubCanvasRect(app)
+
+    await app
+      .find('[data-field="bitmap-canvas"]')
+      .trigger('pointerdown', { button: 0, ...pixelPoint(1, 3) })
+
+    expect(store.selection).toEqual({ anchor: 0, focus: 0 })
+    expect(store.revealRequest).toBeNull()
+  })
+})
