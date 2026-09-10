@@ -41,6 +41,17 @@ export interface EofByteSlotsParams extends RowByteSpanParams {
   size: number
 }
 
+export interface BitmapOffsetAtParams extends RowByteSpanParams {
+  /** Canvas-relative x in CSS px — `event.clientX - canvas.getBoundingClientRect().left`. */
+  x: number
+  /** Canvas-relative y in CSS px — `event.clientY - canvas.getBoundingClientRect().top`. */
+  y: number
+  /** Integer upscale the canvas is drawn at; pixel coords are divided by it. */
+  zoom: number
+  /** The document byte offset the top-left pixel maps to (the Origin). */
+  origin: number
+}
+
 export interface PackBitmapParams extends RowByteSpanParams {
   /** Swap foreground / background bit values only — no geometry change. */
   invert: boolean
@@ -96,6 +107,27 @@ export function eofByteSlots({ origin, width, stride, height, size }: EofByteSlo
     }
   }
   return slots
+}
+
+/**
+ * The document byte offset a Bitmap pixel click lands on (plan-phase1.75 §4.9,
+ * #71): `origin + row·stride + floor(col / 8)`, where `row` / `col` are the
+ * canvas-relative CSS pixel coords divided by `zoom`. Pure geometry — the
+ * mirror of `packBitmap`'s slot walk. The trailing `stride − width` bytes of a
+ * row are skip-gap and never receive pixels, so a `col` always lands inside the
+ * `width·8` painted span.
+ *
+ * Returns `null` when the point is outside the `width·8 × height` pixel grid
+ * (a click in the scroll-box margin past the image). EOF and residency are the
+ * caller's to check — this function has no `size` and no read path.
+ */
+export function bitmapOffsetAt({ x, y, zoom, origin, width, stride, height }: BitmapOffsetAtParams): number | null {
+  const col = Math.floor(x / zoom)
+  const row = Math.floor(y / zoom)
+  if (col < 0 || row < 0 || col >= width * 8 || row >= height) {
+    return null
+  }
+  return origin + row * stride + Math.floor(col / 8)
 }
 
 /**

@@ -22,6 +22,10 @@
      "no byte here", the pixel-view analogue of the Inspector's dim em dash.
      Chrome, not data: `invert` never touches it. */
   --color-bitmap-eof: #3a3a3a;
+  /* The Extent marker (plan-phase1.75 §4.8, ADR-0011) — a thin rule down the
+     grid gutter showing where a locked Bitmap's byte run sits. Passive chrome:
+     distinct from the Cursor blue so the two never read as the same mark. */
+  --color-bitmap-extent: #d9a441;
 }
 
 @media (prefers-color-scheme: light) {
@@ -36,6 +40,7 @@
     --color-cursor: #0067c0;
     --color-hover: #e4e6eb;
     --color-bitmap-eof: #d0d0d0;
+    --color-bitmap-extent: #b7791f;
   }
 }
 

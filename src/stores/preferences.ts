@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { CODE_PAGES } from '@/core'
 import type { CodePage } from '@/core'
 
@@ -191,6 +191,13 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const codePage = ref<CodePage>(initial.codePage)
   const bitmapWidth = ref(initial.bitmapWidth)
   const bitmapStrideOffset = ref(initial.bitmapStrideOffset)
+  /**
+   * Stride is **derived, never stored** (plan §4.2): `Width + bitmapStrideOffset`,
+   * so it tracks Width in both directions for free and `Stride < Width` is
+   * unrepresentable. The one place every consumer — `packBitmap` call sites, the
+   * read span, the Extent marker — reads it from.
+   */
+  const bitmapStride = computed(() => bitmapWidth.value + bitmapStrideOffset.value)
   const bitmapHeight = ref<number | null>(initial.bitmapHeight)
   const bitmapZoom = ref(initial.bitmapZoom)
   const bitmapInvert = ref(initial.bitmapInvert)
@@ -300,6 +307,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     codePage,
     bitmapWidth,
     bitmapStrideOffset,
+    bitmapStride,
     bitmapHeight,
     bitmapZoom,
     bitmapInvert,

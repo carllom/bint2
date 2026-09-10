@@ -26,7 +26,9 @@ import { DomHexRenderer } from '@/rendering'
 import type { HexRowView, SelectionView } from '@/rendering'
 import GotoBox from '@/components/GotoBox.vue'
 import VirtualScrollbar from '@/components/VirtualScrollbar.vue'
+import ExtentMarker from '@/components/ExtentMarker.vue'
 import { useByteAt } from '@/composables/useByteAt'
+import { useBitmapStore } from '@/stores/bitmap'
 import { useDocumentStore } from '@/stores/document'
 import { usePreferencesStore } from '@/stores/preferences'
 
@@ -54,6 +56,7 @@ const CURSOR_ANNOUNCE_DEBOUNCE_MS = 200
 
 const documentStore = useDocumentStore()
 const preferences = usePreferencesStore()
+const bitmap = useBitmapStore()
 const gridEl = useTemplateRef<HTMLElement>('grid')
 const rowAreaEl = useTemplateRef<HTMLElement>('rowArea')
 const probeEl = useTemplateRef<HTMLElement>('probe')
@@ -620,6 +623,26 @@ function revealOffset(offset: number): void {
   }
 }
 
+// The Extent marker (plan §4.8, ADR-0011): a passive gutter overlay, shown only
+// while the Bitmap's Origin is locked *and* the Bitmap Panel is mounted
+// (`bitmapOpen` — the section is `unmount-on-hide`). `bitmap.extent` is already
+// `null` in Follow mode and a locked Origin resets when another document opens,
+// so this is the whole gate. The overlay only reads `topByteOffset` and the
+// measured row height; it holds no coordinate authority.
+const extentRange = computed(() =>
+  hasSource.value && preferences.bitmapOpen ? bitmap.extent : null,
+)
+
+/** The chevron was clicked — scroll the grid so the Extent's first row sits at
+ *  the top (plan §4.8). `scrollTo` aligns `start` down to that row boundary and
+ *  clamps it through the one choke point (ADR-0006). */
+function onExtentReveal(): void {
+  const range = bitmap.extent
+  if (range !== null) {
+    documentStore.scrollTo(range.start, metrics.value)
+  }
+}
+
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
@@ -657,6 +680,17 @@ onMounted(() => {
   )
   watch(hoveredByte, schedulePaint) // repaint as the hover mark moves (#30)
   watch(() => preferences.codePage, schedulePaint) // repaint the char column on a code-page change (#56)
+  // The Bitmap's click-to-cursor asks the grid to reveal the clicked byte's row
+  // (plan §4.9). The Cursor itself already moved through the store; this is the
+  // minimal scroll that follows, the same as a keyboard cursor move.
+  watch(
+    () => documentStore.revealRequest,
+    (req) => {
+      if (req !== null) {
+        revealOffset(req.offset)
+      }
+    },
+  )
   watch(metrics, (m) => {
     // A grown viewport or a shorter row (zoom-out) lowers maxFirstRow — pull a
     // near-EOF top back through the choke point before repainting.
@@ -697,6 +731,15 @@ onBeforeUnmount(() => {
     >
       <span ref="probe" class="hex-viewer__probe" aria-hidden="true">00</span>
       <div ref="grid" class="hex-viewer__grid" />
+      <!-- Passive gutter overlay for a locked Bitmap's Extent (ADR-0011). Reads
+           `topByteOffset` and the measured row height only; `pointer-events:
+           none` on its band, so byte clicks pass through to the cells. -->
+      <ExtentMarker
+        :range="extentRange"
+        :top-byte-offset="documentStore.topByteOffset"
+        :metrics="metrics"
+        @reveal="onExtentReveal"
+      />
       <!-- Reading the grid as a document is a non-goal (ADR-0005): rows are
            aria-hidden (DomHexRenderer) and never focusable. These two elements
            are the entire accessibility surface for the byte grid itself. -->

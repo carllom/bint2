@@ -1,6 +1,8 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { rowByteSpan } from '@/core'
 import type { ByteSource } from '@/core'
+import { usePreferencesStore } from '../preferences'
 import { useDocumentStore } from '../document'
 import { useBitmapStore } from '../bitmap'
 
@@ -74,5 +76,66 @@ describe('the Bitmap store — the Origin state machine', () => {
     documentStore.open(sourceOfSize(8192), 'b.bin')
     expect(bitmap.originLocked).toBe(false)
     expect(bitmap.lockedOffset).toBeNull()
+  })
+})
+
+describe('the Bitmap store — the locked Extent (plan §4.8, ADR-0011)', () => {
+  beforeEach(() => {
+    localStorage.clear() // preferences persists; keep each case on the defaults
+    setActivePinia(createPinia())
+  })
+
+  it('is null in Follow mode — the linkage there is the Cursor', () => {
+    const bitmap = useBitmapStore()
+    expect(bitmap.extent).toBeNull()
+  })
+
+  it('is [Origin, Origin + Stride·(Height−1) + Width) once the Origin is locked', () => {
+    const prefs = usePreferencesStore()
+    const bitmap = useBitmapStore()
+    prefs.setBitmapWidth(4)
+    bitmap.setRenderHeight(64)
+
+    bitmap.lockOrigin(1000)
+    const span = rowByteSpan({ width: 4, stride: 4, height: 64 })
+    expect(bitmap.extent).toEqual({ start: 1000, end: 1000 + span })
+  })
+
+  it('tracks Width / Stride / render height while locked, and clears on followCursor', () => {
+    const prefs = usePreferencesStore()
+    const bitmap = useBitmapStore()
+    prefs.setBitmapWidth(4)
+    bitmap.setRenderHeight(32)
+    bitmap.lockOrigin(0)
+
+    prefs.setBitmapWidth(13)
+    prefs.setBitmapStrideOffset(3) // Stride = 16
+    bitmap.setRenderHeight(48)
+    expect(bitmap.extent).toEqual({
+      start: 0,
+      end: rowByteSpan({ width: 13, stride: 16, height: 48 }),
+    })
+
+    bitmap.followCursor()
+    expect(bitmap.extent).toBeNull()
+  })
+
+  it('a contiguous hull even when Stride > Width — ends at + Width, not + Stride', () => {
+    const prefs = usePreferencesStore()
+    const bitmap = useBitmapStore()
+    prefs.setBitmapWidth(2)
+    prefs.setBitmapStrideOffset(6) // Stride 8, a 6-byte per-row gap
+    bitmap.setRenderHeight(3)
+    bitmap.lockOrigin(100)
+
+    // 8 + 8 + 2 — the last row contributes only its Width, gaps are not in the run.
+    expect(bitmap.extent).toEqual({ start: 100, end: 100 + 18 })
+  })
+
+  it('setRenderHeight floors at 1 row', () => {
+    const bitmap = useBitmapStore()
+    bitmap.setRenderHeight(0)
+    bitmap.lockOrigin(0)
+    expect(bitmap.extent).toEqual({ start: 0, end: usePreferencesStore().bitmapWidth })
   })
 })

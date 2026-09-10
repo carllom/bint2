@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
-import { eofByteSlots, packBitmap, rowByteSpan, toHex } from '@/core'
+import { bitmapOffsetAt, eofByteSlots, packBitmap, rowByteSpan, toHex } from '@/core'
 import type { PackedBitmap } from '@/core'
 import { useBytesAt } from '@/composables/useBytesAt'
 import { useBitmapStore } from '@/stores/bitmap'
@@ -101,7 +101,7 @@ const FALLBACK_HEIGHT = 64
 const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi)
 
 const width = computed(() => preferences.bitmapWidth)
-const stride = computed(() => width.value + preferences.bitmapStrideOffset)
+const stride = computed(() => preferences.bitmapStride)
 const zoom = computed(() => preferences.bitmapZoom)
 const invert = computed(() => preferences.bitmapInvert)
 
@@ -123,6 +123,11 @@ const height = computed(() => {
  *  consumes only Width. Reactive — a Width / Stride / Height change re-issues the
  *  read at the new length, guarded against a stale span in `useBytesAt`. */
 const span = computed(() => rowByteSpan({ width: width.value, stride: stride.value, height: height.value }))
+
+// The Extent marker in the hex grid (plan §4.8, ADR-0011) needs the *resolved*
+// render height, and `bitmapHeight` may be `null` → measured here. Publish it to
+// the Bitmap store, which owns the `extent` computed the passive overlay reads.
+watch(height, (rows) => bitmap.setRenderHeight(rows), { immediate: true })
 
 // The byte run at the Origin. `readSync` serves it in-frame when the covering
 // pages are resident — the Follow-mode hot path, where consecutive spans overlap
@@ -494,6 +499,44 @@ function focusSelf(event: PointerEvent): void {
   ;(event.currentTarget as HTMLElement).focus()
 }
 
+// ── Click-to-cursor (plan §4.9, #71) ─────────────────────────────────────
+// A pixel click maps to `Origin + row·Stride + floor(col / 8)` (row / col =
+// canvas-relative CSS px ÷ Zoom, via the pure `bitmapOffsetAt`). Plain click →
+// `setCursor`; Shift+click → `extendSelectionTo` — the same store path a grid
+// click takes (ADR-0003), in *both* Follow and Lock. The Cursor move is then
+// followed by `requestReveal` so the hex grid scrolls that row into view. Left
+// button, no pointer capture; drag-select stays fog. Clicks past EOF or on
+// non-resident pixels are inert (residency probed with `readSync`).
+function onCanvasPointerDown(event: PointerEvent): void {
+  const o = origin.value
+  const cv = canvas.value
+  if (event.button !== 0 || o === null || cv === null) {
+    return
+  }
+  const rect = cv.getBoundingClientRect()
+  const target = bitmapOffsetAt({
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+    zoom: zoom.value,
+    origin: o,
+    width: width.value,
+    stride: stride.value,
+    height: height.value,
+  })
+  if (target === null || target >= documentStore.fileSize) {
+    return // outside the pixel grid, or past EOF
+  }
+  if (documentStore.source?.readSync(target, 1) == null) {
+    return // the byte is not resident — nothing to navigate to
+  }
+  if (event.shiftKey) {
+    documentStore.extendSelectionTo(target)
+  } else {
+    documentStore.setCursor(target)
+  }
+  documentStore.requestReveal(target)
+}
+
 // Test seam — the packed frame plus the #83 render model, because none of it is
 // observable from the DOM (happy-dom gives `<canvas>` no 2-D context, plan §7):
 // `renderState` (pending / dead-salvage / resident / no-origin), `eofMask` (the
@@ -596,6 +639,7 @@ defineExpose({ frame, renderState, eofMask, salvagedRows })
           :width="frame?.w ?? 0"
           :height="frame?.h ?? 0"
           :style="canvasStyle"
+          @pointerdown="onCanvasPointerDown"
         ></canvas>
       </div>
     </template>

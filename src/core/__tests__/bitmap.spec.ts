@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { eofByteSlots, packBitmap, rowByteSpan } from '../bitmap'
+import { bitmapOffsetAt, eofByteSlots, packBitmap, rowByteSpan } from '../bitmap'
 
 // ── Prototype fixtures, reconstructed ───────────────────────────────────────
 // Lifted verbatim from src/core/__prototype__/bitmap-packing.prototype.html on
@@ -256,5 +256,38 @@ describe('packBitmap — the fog paths are carried but not shipped', () => {
     const implicit = packBitmap(bytes, base)
     const explicit = packBitmap(bytes, { ...base, bitOrder: 'msb', order: 'row' })
     expect(Array.from(implicit.bits)).toEqual(Array.from(explicit.bits))
+  })
+})
+
+describe('bitmapOffsetAt — a pixel click back to a document byte offset (plan §4.9)', () => {
+  const geom = { origin: 1000, width: 4, stride: 4, height: 64 }
+
+  it('maps origin + row·stride + floor(col / 8), pixel coords divided by Zoom', () => {
+    // Zoom 1: the top-left pixel is the Origin itself.
+    expect(bitmapOffsetAt({ x: 0, y: 0, zoom: 1, ...geom })).toBe(1000)
+    // col 8 (the 2nd byte of row 0), still row 0.
+    expect(bitmapOffsetAt({ x: 8, y: 0, zoom: 1, ...geom })).toBe(1001)
+    // Any pixel within a byte's 8-wide cell resolves to that byte.
+    expect(bitmapOffsetAt({ x: 15, y: 0, zoom: 1, ...geom })).toBe(1001)
+    // row 3, byte 2 → 1000 + 3·4 + 2.
+    expect(bitmapOffsetAt({ x: 20, y: 3, zoom: 1, ...geom })).toBe(1014)
+  })
+
+  it('divides the CSS pixel coords by Zoom before the grid math', () => {
+    // Zoom 2: a 30 px / 6 px click is intrinsic pixel (15, 3) → row 3, byte 1.
+    expect(bitmapOffsetAt({ x: 30, y: 6, zoom: 2, ...geom })).toBe(1000 + 3 * 4 + 1)
+  })
+
+  it('honours Stride > Width — rows advance by Stride, not Width', () => {
+    const strided = { origin: 0, width: 3, stride: 8, height: 10 }
+    // row 2, byte 0 → 0 + 2·8 + 0.
+    expect(bitmapOffsetAt({ x: 0, y: 2, zoom: 1, ...strided })).toBe(16)
+  })
+
+  it('returns null for a point outside the width·8 × height pixel grid', () => {
+    expect(bitmapOffsetAt({ x: -1, y: 0, zoom: 1, ...geom })).toBeNull()
+    expect(bitmapOffsetAt({ x: 0, y: -1, zoom: 1, ...geom })).toBeNull()
+    expect(bitmapOffsetAt({ x: geom.width * 8, y: 0, zoom: 1, ...geom })).toBeNull() // one past the last column
+    expect(bitmapOffsetAt({ x: 0, y: geom.height, zoom: 1, ...geom })).toBeNull() // one past the last row
   })
 })
