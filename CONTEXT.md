@@ -96,11 +96,19 @@ column. Always exactly one glyph per byte — never a decoded multi-byte string 
 and which glyph is the Code page's choice.
 _Avoid_: ASCII pane, char pane, text column
 
+**Sidebar**:
+The resizable region down the right edge of the app shell, holding the stack of
+Panels. Shown only while a document is open. A draggable splitter sets its width
+— persisted — and collapses it to nothing and back. It never holds the byte
+grid, which keeps the rest of the width.
+_Avoid_: drawer, dock, side panel
+
 **Panel**:
-A named region of the app shell docked to an edge of the viewport, holding one
-tool. The inspector is the first. A panel occupies one of two slots — a strip
-along the bottom or a column down the right — at a time, and collapses to a bar.
-_Avoid_: pane, dock, widget
+One titled, independently collapsible region within the Sidebar, holding one
+tool. Two exist — the Inspector and the Bitmap — in a fixed order. No docking,
+no bottom placement, no drag-to-rearrange, no tear-off. Each opens and closes on
+its own, and that open state is persisted.
+_Avoid_: pane, dock, widget, accordion section
 
 **Inspector**:
 The panel that decodes the bytes at the cursor into each primitive numeric type
