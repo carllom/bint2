@@ -1,4 +1,13 @@
+<script lang="ts">
+/** What {@link SplitterPanel} exposes to a parent through a template ref. */
+export interface SplitterPanelHandle {
+  /** Resize to `size`, in the panel's `size-unit`. */
+  resize: (size: number) => void
+}
+</script>
+
 <script setup lang="ts">
+import { useTemplateRef } from 'vue'
 import { SplitterPanel, useForwardPropsEmits } from 'reka-ui'
 import type { SplitterPanelProps } from 'reka-ui'
 
@@ -21,10 +30,22 @@ const emits = defineEmits<{
 }>()
 
 const forwarded = useForwardPropsEmits(props, emits)
+
+// Reka's panel is uncontrolled (`default-size` + an imperative API, no size
+// prop to bind). The shell needs one imperative call: the wrapper-added
+// "double-click the handle → reset to the default width" (plan §3.2). Re-expose
+// just `resize` so that seam stays at this wrapper and `reka-ui` is never
+// reached for directly.
+const inner = useTemplateRef<{ resize: (size: number) => void }>('inner')
+
+defineExpose({
+  /** Resize to `size`, in the panel's `size-unit`. */
+  resize: (size: number): void => inner.value?.resize(size),
+} satisfies SplitterPanelHandle)
 </script>
 
 <template>
-  <SplitterPanel v-bind="forwarded" class="splitter-panel">
+  <SplitterPanel ref="inner" v-bind="forwarded" class="splitter-panel">
     <slot />
   </SplitterPanel>
 </template>

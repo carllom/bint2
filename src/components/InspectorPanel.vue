@@ -159,23 +159,19 @@ function copyRow(row: RenderedRow): void {
 </template>
 
 <style scoped>
-/* A full-width strip above the status bar: the control strip, then the rows,
-   the group the wrap unit on a narrow screen (plan §3.1, §3.2). The Sidebar
-   relocation and per-section collapse are #80's. */
+/* The Inspector accordion section's content (plan §3.1, §3.5): the control
+   strip, then the rows, the group the wrap unit on a narrow Sidebar. Natural
+   height — no `max-height`, no scrollbar of its own; the whole Sidebar scrolls
+   if the stack overflows. The section framing (border, title, collapse) is the
+   accordion's, not this element's. */
 .inspector {
-  flex: none;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.25rem 1.5ch;
   width: 100%;
-  max-height: 40%;
-  overflow: auto;
-  padding: 0.25rem 0.5rem;
-  border-top: 1px solid var(--color-border);
   font-family: var(--font-mono);
   color: var(--color-fg);
-  background: var(--color-bg);
 }
 
 .inspector__controls {
