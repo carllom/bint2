@@ -10,6 +10,13 @@ writing bytes back, no Web Worker (still evidence-gated, unchanged from
 > wayfinder ticket on map [#51](https://github.com/carllom/bint2/issues/51); the
 > tickets are authoritative where they carry more detail than this prose. What
 > remains is milestone execution (§9).
+>
+> **Superseded in part by phase 1.75** ([`plan-phase1.75.md`](plan-phase1.75.md),
+> map [#63](https://github.com/carllom/bint2/issues/63)): the Inspector's
+> `dock: 'bottom' | 'right'` model and its bottom-strip layout are gone — it is
+> now one collapsible **Panel** in a resizable right-hand **Sidebar** beside the
+> new **Bitmap**. See the "Superseded (phase 1.75)" notes in §2 and §3.1, and
+> [ADR-0010](adr/0010-the-inspector-lives-in-a-fixed-sidebar.md).
 
 ## 1. What phase 1.5 adds
 
@@ -53,6 +60,18 @@ serves every project from the shared `carllom.github.io` origin.
 | `byteOrder` | `'le' \| 'be'` | `'le'` | `setByteOrder` | #55 |
 | `codePage` | `'ascii' \| 'cp437' \| 'windows-1252' \| 'petscii' \| 'petscii-lower' \| 'akai'` | `'ascii'` | `setCodePage` | #56 |
 
+> **Superseded (phase 1.75).** The `dock` field — with `setDock` and the `Dock`
+> type — was **removed** in phase 1.75; the Inspector no longer has a
+> bottom/right choice. `collapsed` was renamed `sidebarCollapsed` (now
+> Sidebar-wide, not Inspector-only), and `sidebarWidth` / `inspectorOpen` /
+> `bitmapOpen` were added. A stored `dock` or `collapsed` key is ignored on load
+> and dropped on the next write — still no version stamp. The five `bitmap*`
+> render params were also added here. See
+> [`plan-phase1.75.md`](plan-phase1.75.md) §3.4,
+> [ADR-0010](adr/0010-the-inspector-lives-in-a-fixed-sidebar.md) and map
+> [#63](https://github.com/carllom/bint2/issues/63)
+> ([#68](https://github.com/carllom/bint2/issues/68)).
+
 - Explicit named setters, each calling a private `persist()` that rewrites the
   whole object as JSON on every change.
 - **Loaded once on init with per-field validation**: each field is checked
@@ -71,6 +90,17 @@ serves every project from the shared `carllom.github.io` origin.
 ## 3. The Inspector ([#54](https://github.com/carllom/bint2/issues/54))
 
 ### 3.1 Nature & placement
+
+> **Superseded (phase 1.75).** The two-dock-slot model in this section — bottom
+> strip vs. right column, the `dock` preference, the horizontal resize handle,
+> collapse-to-a-thin-bar, and the dock toggle in §3.5 — was replaced in phase
+> 1.75 by a single fixed right-hand **Sidebar** holding a vertical stack of
+> independently collapsible **Panels** (the Inspector, then the Bitmap). What
+> carries over unchanged: the row groups (§3.2), the per-row copy buttons
+> (§3.6), and the `hex` toggle (§3.3) — the last now in a control strip at the
+> top of the Panel's content. See [`plan-phase1.75.md`](plan-phase1.75.md) §3,
+> [ADR-0010](adr/0010-the-inspector-lives-in-a-fixed-sidebar.md) and map
+> [#63](https://github.com/carllom/bint2/issues/63).
 
 - A distinct **Panel** — a named app-shell region docked to a Viewport edge,
   holding one tool. Built as a **one-off in a named `HomeView` layout slot**, not
