@@ -524,8 +524,12 @@ defineExpose({ frame })
   color: var(--color-fg-dim);
 }
 
+/* Wide enough that at least 3 digits stay visible past the native spinner
+   buttons (Height reaches 4096); `flex: none` so the wrapping control strip
+   never shrinks it back below that. */
 .bitmap__ctl input[type='number'] {
-  width: 4.5ch;
+  flex: none;
+  width: 7ch;
   border: 1px solid var(--color-border);
   border-radius: 3px;
   background: none;
