@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prototype — Bitmap packing (MSB-first, stride, invert)</title>
+<style>
+  :root {
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --ink: #1f2330;
+    --ink-soft: #5b6172;
+    --line: #e3e5ec;
+    --bg: #fbfbfd;
+    --warn: #b45309;
+    --warn-soft: #fef3c7;
+    --ok: #047857;
+    --ok-soft: #ecfdf5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 28px 96px; }
+  h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); margin: 34px 0 12px; }
+  p { margin: 0 0 12px; }
+  .lede { color: var(--ink-soft); max-width: 74ch; }
+  .assume { font-size: 13px; color: var(--ink-soft); border-left: 3px solid var(--line); padding: 4px 0 4px 12px; margin: 12px 0 0; max-width: 74ch; }
+  .settled {
+    background: var(--accent-soft);
+    border: 1px solid #d7dcfb;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 16px 0 0;
+    font-size: 13.5px;
+    max-width: 74ch;
+  }
+  .settled b { color: var(--accent); }
+  code { font-family: "SF Mono", "JetBrains Mono", "Consolas", ui-monospace, monospace; font-size: 0.92em; }
+
+  .stage { display: grid; grid-template-columns: 1fr 320px; gap: 22px; margin-top: 8px; align-items: start; }
+  @media (max-width: 960px) { .stage { grid-template-columns: 1fr; } }
+
+  .screen {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background:
+      repeating-conic-gradient(#eceef4 0% 25%, #f6f7fa 0% 50%) 50% / 16px 16px;
+    padding: 18px;
+    min-height: 320px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow: auto;
+  }
+  canvas#out {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: transparent;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
+  }
+
+  .panel { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 14px 16px; font-size: 13px; }
+  .panel h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-family: "SF Mono","JetBrains Mono","Consolas",ui-monospace,monospace; font-size: 12px; }
+  .kv dt { color: var(--ink-soft); }
+  .kv dd { margin: 0; text-align: right; }
+  .kv dd.em { color: var(--accent); }
+  .kv dd.warn { color: var(--warn); }
+  .kv dd.ok { color: var(--ok); }
+  .changed { margin-top: 12px; padding: 8px 10px; background: var(--accent-soft); border-radius: 6px; font-size: 12px; min-height: 34px; }
+  .changed b { color: var(--accent); }
+  .changed.warnrow { color: var(--warn); background: var(--warn-soft); }
+
+  .group { margin-top: 14px; }
+  .group h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
+  button {
+    font: inherit; font-size: 13px;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+    border-radius: 7px; padding: 6px 11px; cursor: pointer;
+  }
+  button:hover { border-color: #b9bdd0; }
+  button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.warn-on { background: var(--warn); color: #fff; border-color: var(--warn); }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .btnrow .lbl { font-size: 12px; color: var(--ink-soft); min-width: 62px; }
+
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin-top: 8px; }
+  .tab { border: 1px solid var(--line); border-bottom: none; background: #f2f3f7; border-radius: 8px 8px 0 0; padding: 7px 12px; font-size: 12.5px; cursor: pointer; }
+  .tab.active { background: #fff; font-weight: 600; color: var(--accent); position: relative; top: 1px; }
+  .scenario { border: 1px solid var(--line); border-top: none; border-radius: 0 0 10px 10px; padding: 16px 18px; background: #fff; }
+  .scenario p { max-width: 78ch; }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .steps button.done { opacity: 0.4; text-decoration: line-through; }
+  .steps button.next { box-shadow: 0 0 0 2px var(--accent-soft); border-color: var(--accent); }
+  .verdict { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #f2f3f7; font-size: 13px; }
+  .verdict b { color: var(--accent); }
+  .watch { color: var(--ok); }
+
+  .foot { margin-top: 40px; color: var(--ink-soft); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 14px; max-width: 84ch; }
+  .foot code { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Prototype — Bitmap packing: <code>MSB-first</code>, <code>Stride</code>, <code>invert</code></h1>
+
+  <p class="lede">
+    Ticket <b>“Bitmap rendering: prove the packing function against real font/icon data”</b> (#70), on map
+    <a href="https://github.com/carllom/bint2/issues/63">#63</a>. The <b>Bitmap</b> renders a contiguous run
+    of the document’s bytes 1&nbsp;bit&nbsp;per&nbsp;pixel — each byte is eight horizontal pixels, a set bit
+    paints the foreground. Before that render is specced into a milestone, this page pushes the core packing
+    transform through real glyph tables, a padded framebuffer, and edge cases that are hard to check on paper.
+  </p>
+
+  <p class="lede"><b>The question being prototyped:</b> is the packing function
+    <code>(bytes, width, stride, height, invert) → 1-bit pixel buffer</code> correct against real data —
+    does MSB-first render upright, does <code>Stride&nbsp;&gt;&nbsp;Width</code> skip the right gap bytes,
+    does <code>invert</code> do only what it should, does integer <code>Zoom</code> stay crisp — and does
+    anything here argue for pulling <b>LSB-first</b> or <b>column-major</b> packing out of the map’s fog now
+    rather than later?</p>
+
+  <p class="assume"><b>Prototype branch: LOGIC</b> (per the <code>prototype</code> skill) — the question is
+    whether a transform is <i>right</i>, not what a UI should look like. But a bitmap can only be judged by
+    looking at it, so “current state” below is a live <code>&lt;canvas&gt;</code> next to the numeric state.
+    Everything is in memory; nothing is persisted.</p>
+
+  <div class="settled">
+    <b>Already decided — not reopened here</b> (<a href="https://github.com/carllom/bint2/issues/65">#65</a>,
+    ADR-0008): MSB-first (bit&nbsp;7 = leftmost pixel), bit value <code>1</code> = foreground,
+    <code>invert</code> swaps foreground/background, colours follow the theme (no pickers),
+    <code>Zoom</code> 1–3 with <code>image-rendering: pixelated</code> and smoothing off. This prototype
+    <i>validates</i> those against real bytes and probes the LSB-first / column-major fog — it does not
+    re-litigate them.
+  </div>
+
+  <h2>The module under test</h2>
+  <p class="lede">Everything on the canvas is driven by one throwaway module (<code>bitmap</code>, in this
+    file’s <code>&lt;script&gt;</code>), written as the pure surface the ticket wants to freeze — no DOM, no
+    store:</p>
+  <ul class="lede">
+    <li><code>rowByteSpan({width, stride, height})</code> → <code>stride·(height−1) + width</code>, the byte
+      count a render needs (the read-path ticket <a href="https://github.com/carllom/bint2/issues/66">#66</a>
+      pins this).</li>
+    <li><code>packBitmap(bytes, {width, stride, height, invert, bitOrder, order})</code> →
+      <code>{ bits: Uint8Array (0|1 per pixel), w, h, bytesRead, bytesMissing }</code>. <code>bitOrder</code>
+      defaults to <code>'msb'</code> and <code>order</code> to <code>'row'</code> — the other values
+      (<code>'lsb'</code>, <code>'col'</code>) are the <b>fog previews</b>, present only so this page can show
+      what they would do.</li>
+  </ul>
+  <p class="lede">Colour lives outside the pure module: a throwaway <code>paint()</code> turns
+    <code>bits</code> into <code>ImageData</code>, <code>putImageData</code> onto a 1× canvas, then
+    <code>drawImage</code> upscaled by integer <code>Zoom</code> with smoothing off. If the walkthroughs pass,
+    <code>rowByteSpan</code> + <code>packBitmap</code> lift into <code>src/core/bitmap.ts</code> roughly
+    as-is.</p>
+
+  <div class="stage">
+    <div class="screen"><canvas id="out" width="10" height="10"></canvas></div>
+    <div class="panel">
+      <h3>Current state</h3>
+      <dl class="kv" id="state"></dl>
+      <div class="changed" id="changed">Load a data set to begin.</div>
+    </div>
+  </div>
+
+  <h2>Free play — poke at it in any order</h2>
+
+  <div class="group">
+    <div class="btnrow"><span class="lbl">Data set</span>
+      <button data-ds="font">Font 8×8 ROM</button>
+      <button data-ds="icons">Icons 16×16</button>
+      <button data-ds="struct">Struct array</button>
+      <button data-ds="fb">Padded framebuffer</button>
+      <button data-ds="ramp">Bit-order ramp</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="btnrow"><span class="lbl">Width</span>
+      <button data-act="w-1">− 1 byte</button>
+      <button data-act="w+1">+ 1 byte</button>
+      <span class="lbl" style="min-width:0">·</span>
+      <button data-act="stride=width">Stride = Width</button>
+    </div>
+    <div class="btnrow" style="margin-top:6px"><span class="lbl">Stride</span>
+      <button data-act="s-1">− 1 byte</button>
+      <button data-act="s+1">+ 1 byte</button>
+      <span class="lbl" style="min-width:0">(clamped ≥ Width)</span>
+    </div>
+    <div class="btnrow" style="margin-top:6px"><span class="lbl">Height</span>
+      <button data-act="h-4">− 4 rows</button>
+      <button data-act="h+4">+ 4 rows</button>
+      <button data-act="h=fit">Fit data set</button>
+    </div>
+    <div class="btnrow" style="margin-top:6px"><span class="lbl">Origin</span>
+      <button data-act="o-8">− 8</button>
+      <button data-act="o-1">− 1</button>
+      <button data-act="o+1">+ 1</button>
+      <button data-act="o+8">+ 8</button>
+      <button data-act="o=0">⇤ 0</button>
+      <button data-act="o=end">end ⇥</button>
+    </div>
+    <div class="btnrow" style="margin-top:6px"><span class="lbl">Zoom</span>
+      <button data-act="z=1">1×</button>
+      <button data-act="z=2">2×</button>
+      <button data-act="z=3">3×</button>
+    </div>
+    <div class="btnrow" style="margin-top:6px"><span class="lbl">Toggles</span>
+      <button data-act="invert">invert</button>
+      <button data-act="bitorder">bit order: MSB-first</button>
+      <button data-act="order">order: row-major</button>
+    </div>
+  </div>
+
+  <h2>Guided walkthroughs</h2>
+  <div class="tabs" id="tabs"></div>
+  <div class="scenario" id="scenario"></div>
+
+  <div class="foot">
+    <p><b>How this is captured.</b> When the walkthroughs have answered the question, the validated
+      <code>rowByteSpan</code> + <code>packBitmap</code> lift into <code>src/core/bitmap.ts</code> (the
+      decision, absorbed); this HTML shell rides along to branch <code>prototype/bitmap-packing</code> as a
+      primary source, with a context pointer left on <a href="https://github.com/carllom/bint2/issues/70">#70</a>.</p>
+    <p><b>A verdict looks like:</b> “MSB-first + Stride skip confirmed against the font ROM and the padded
+      framebuffer; invert stays scoped to fg/bg; Zoom 1–3 crisp. LSB-first / column-major
+      <i>stay in the fog</i> — no in-hand format needs them” — <i>or</i> “the AKAI font dump is column-major,
+      ticket it now.”</p>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   LIFTABLE MODULE  —  candidate for src/core/bitmap.ts
+   Pure. No DOM, no store. Answers #70: is the packing transform right?
+   ========================================================================= */
+const bitmap = (() => {
+  /**
+   * Bytes a render needs, counting from the Origin: every row but the last
+   * consumes a full Stride; the last consumes only Width (#66).
+   * @param {{width:number, stride:number, height:number}} p
+   * @returns {number}
+   */
+  function rowByteSpan({ width, stride, height }) {
+    return stride * (height - 1) + width;
+  }
+
+  /**
+   * Pack a byte run into a 1-bit-per-pixel buffer.
+   *
+   * @param {Uint8Array} bytes  the document's bytes starting AT the Origin
+   *                             (caller slices; reads past the end are treated
+   *                             as background, and counted).
+   * @param {object} p
+   * @param {number}  p.width   bytes drawn per row  (row-major: ×8 px wide)
+   * @param {number}  p.stride  bytes advanced per row  (>= width; the trailing
+   *                             stride−width bytes of each row are skipped)
+   * @param {number}  p.height  rows  (row-major: pixel rows; column-major: byte
+   *                             pages, each 8 px tall)
+   * @param {boolean} p.invert  swap foreground/background bit values
+   * @param {'msb'|'lsb'} [p.bitOrder='msb']  which bit of a byte is the FIRST
+   *                             pixel. 'msb' is the decision (#65); 'lsb' is a
+   *                             fog preview.
+   * @param {'row'|'col'} [p.order='row']  byte layout. 'row' is the decision;
+   *                             'col' (vertical bytes, bit-0 = top) is a fog
+   *                             preview of the classic OLED/LCD page format.
+   * @returns {{bits:Uint8Array, w:number, h:number, bytesRead:number, bytesMissing:number}}
+   */
+  function packBitmap(bytes, p) {
+    const { width, stride, height, invert } = p;
+    const bitOrder = p.bitOrder || 'msb';
+    const order = p.order || 'row';
+    const has = (i) => i >= 0 && i < bytes.length;
+
+    let bytesRead = 0;
+    let bytesMissing = 0;
+
+    // bit b (0..7) within a byte -> pixel column offset (0 = first pixel)
+    const colOf = (b) => (bitOrder === 'msb' ? 7 - b : b);
+
+    if (order === 'row') {
+      const w = width * 8;
+      const h = height;
+      const bits = new Uint8Array(w * h);
+      for (let row = 0; row < h; row++) {
+        for (let bx = 0; bx < width; bx++) {
+          const si = row * stride + bx;
+          const byte = has(si) ? (bytesRead++, bytes[si]) : (bytesMissing++, 0);
+          for (let b = 0; b < 8; b++) {
+            const on = ((byte >> b) & 1) ^ (invert ? 1 : 0);
+            bits[row * w + bx * 8 + colOf(b)] = on;
+          }
+        }
+      }
+      return { bits, w, h, bytesRead, bytesMissing };
+    }
+
+    // ---- fog preview: column-major (vertical bytes, bit 0 = top pixel) ----
+    // Each byte is an 8-px-tall vertical strip at one pixel column. `width`
+    // strips per page-row, `height` page-rows, so the image is `width` px wide
+    // and `height*8` px tall. Same span formula.
+    const w = width;
+    const h = height * 8;
+    const bits = new Uint8Array(w * h);
+    for (let pr = 0; pr < height; pr++) {
+      for (let x = 0; x < width; x++) {
+        const si = pr * stride + x;
+        const byte = has(si) ? (bytesRead++, bytes[si]) : (bytesMissing++, 0);
+        for (let b = 0; b < 8; b++) {
+          const on = ((byte >> b) & 1) ^ (invert ? 1 : 0);
+          const y = pr * 8 + (bitOrder === 'msb' ? 7 - b : b);
+          bits[y * w + x] = on;
+        }
+      }
+    }
+    return { bits, w, h, bytesRead, bytesMissing };
+  }
+
+  return { rowByteSpan, packBitmap };
+})();
+
+/* =========================================================================
+   THROWAWAY BELOW  —  embedded real-ish data + the page shell.
+   None of this lifts anywhere.
+   ========================================================================= */
+
+/* ---- deterministic noise so every reload looks identical ---- */
+function lcg(seed) { let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) >>> 24; }
+
+/* ---- 8×8 font, authored as .#/. art (leftmost char = MSB = bit 7) ---- */
+const GLYPHS = {
+  ' ': ['........','........','........','........','........','........','........','........'],
+  'A': ['..###...','.#...#..','#.....#.','#######.','#.....#.','#.....#.','#.....#.','........'],
+  'B': ['######..','#.....#.','#.....#.','######..','#.....#.','#.....#.','######..','........'],
+  'C': ['.#####..','#.....#.','#.......','#.......','#.......','#.....#.','.#####..','........'],
+  'D': ['#####...','#....#..','#.....#.','#.....#.','#.....#.','#....#..','#####...','........'],
+  'E': ['#######.','#.......','#.......','#####...','#.......','#.......','#######.','........'],
+  'F': ['#######.','#.......','#.......','#####...','#.......','#.......','#.......','........'],
+  'G': ['.#####..','#.....#.','#.......','#..####.','#.....#.','#.....#.','.#####..','........'],
+  'H': ['#.....#.','#.....#.','#.....#.','#######.','#.....#.','#.....#.','#.....#.','........'],
+  'I': ['.#####..','...#....','...#....','...#....','...#....','...#....','.#####..','........'],
+  'J': ['..#####.','....#...','....#...','....#...','#...#...','#...#...','.###....','........'],
+  'K': ['#....#..','#...#...','#..#....','###.....','#..#....','#...#...','#....#..','........'],
+  'L': ['#.......','#.......','#.......','#.......','#.......','#.......','#######.','........'],
+  'M': ['#.....#.','##...##.','#.#.#.#.','#..#..#.','#.....#.','#.....#.','#.....#.','........'],
+  'N': ['#.....#.','##....#.','#.#...#.','#..#..#.','#...#.#.','#....##.','#.....#.','........'],
+  'O': ['.#####..','#.....#.','#.....#.','#.....#.','#.....#.','#.....#.','.#####..','........'],
+  'P': ['######..','#.....#.','#.....#.','######..','#.......','#.......','#.......','........'],
+  'Q': ['.#####..','#.....#.','#.....#.','#.....#.','#..#..#.','#...#.#.','.####.#.','........'],
+  'R': ['######..','#.....#.','#.....#.','######..','#..#....','#...#...','#....#..','........'],
+  'S': ['.#####..','#.....#.','#.......','.#####..','......#.','#.....#.','.#####..','........'],
+  'T': ['#######.','...#....','...#....','...#....','...#....','...#....','...#....','........'],
+  'U': ['#.....#.','#.....#.','#.....#.','#.....#.','#.....#.','#.....#.','.#####..','........'],
+  'V': ['#.....#.','#.....#.','#.....#.','#.....#.','.#...#..','..#.#...','...#....','........'],
+  'W': ['#.....#.','#.....#.','#.....#.','#..#..#.','#.#.#.#.','##...##.','#.....#.','........'],
+  'X': ['#.....#.','.#...#..','..#.#...','...#....','..#.#...','.#...#..','#.....#.','........'],
+  'Y': ['#.....#.','.#...#..','..#.#...','...#....','...#....','...#....','...#....','........'],
+  'Z': ['#######.','.....#..','....#...','...#....','..#.....','.#......','#######.','........'],
+  '0': ['.#####..','#....##.','#...#.#.','#..#..#.','#.#...#.','##....#.','.#####..','........'],
+  '1': ['...#....','..##....','.#.#....','...#....','...#....','...#....','.#####..','........'],
+  '2': ['.#####..','#.....#.','......#.','...###..','..#.....','.#......','#######.','........'],
+  '3': ['#######.','.....#..','....#...','...###..','......#.','#.....#.','.#####..','........'],
+  '4': ['....##..','...#.#..','..#..#..','.#...#..','#######.','.....#..','.....#..','........'],
+  '5': ['#######.','#.......','######..','......#.','......#.','#.....#.','.#####..','........'],
+  '6': ['..####..','.#......','#.......','######..','#.....#.','#.....#.','.#####..','........'],
+  '7': ['#######.','......#.','.....#..','....#...','...#....','..#.....','..#.....','........'],
+  '8': ['.#####..','#.....#.','#.....#.','.#####..','#.....#.','#.....#.','.#####..','........'],
+  '9': ['.#####..','#.....#.','#.....#.','.######.','......#.','.....#..','.####...','........'],
+  '.': ['........','........','........','........','........','...##...','...##...','........'],
+  ',': ['........','........','........','........','...##...','...##...','..##....','........'],
+  '!': ['...##...','...##...','...##...','...##...','...##...','........','...##...','........'],
+  '?': ['.#####..','#.....#.','......#.','...###..','...#....','........','...#....','........'],
+  '-': ['........','........','........','#######.','........','........','........','........'],
+  ':': ['........','...##...','...##...','........','...##...','...##...','........','........'],
+  '/': ['......#.','.....#..','....#...','...#....','..#.....','.#......','#.......','........'],
+};
+function artToBytes(rows) {
+  // rows: 8 strings of 8 chars. one byte per row, MSB = leftmost.
+  return rows.map((r) => {
+    let v = 0;
+    for (let i = 0; i < 8; i++) if (r[i] === '#') v |= 0x80 >> i;
+    return v;
+  });
+}
+function buildFontROM() {
+  // 0x20..0x7F, 96 glyphs × 8 bytes. Unauthored codes get a "tofu" box so the
+  // table reads like a real sparse ROM.
+  const tofu = artToBytes(['########','#......#','#.####.#','#.#..#.#','#.#..#.#','#.####.#','#......#','########']);
+  const out = [];
+  for (let c = 0x20; c < 0x80; c++) {
+    const ch = String.fromCharCode(c);
+    out.push(...(GLYPHS[ch] ? artToBytes(GLYPHS[ch]) : tofu));
+  }
+  return Uint8Array.from(out);
+}
+
+/* ---- 16×16 icons (2 bytes/row × 16 rows = 32 bytes each), authored as art ---- */
+const ICON_ART = {
+  arrow: [
+    '................','................','.......#........','.......##.......',
+    '.......###......','###############.','###############.','###############.',
+    '###############.','.......###......','.......##.......','.......#........',
+    '................','................','................','................',
+  ],
+  heart: [
+    '................','..####....####..','.######..######.','.##############.',
+    '.##############.','.##############.','..############..','...##########...',
+    '....########....','.....######.....','......####......','.......##.......',
+    '................','................','................','................',
+  ],
+  check: [
+    '................','..............#.','.............##.','............##..',
+    '...........##...','#.........##....','##.......##.....','.##.....##......',
+    '..##...##.......','...##.##........','....###.........','.....#..........',
+    '................','................','................','................',
+  ],
+  smiley: [
+    '.....######.....','...##......##...','..#..........#..','.#....#..#....#.',
+    '.#....#..#....#.','#............#.#','#............#.#','#............#.#',
+    '#..#......#..#.#','#...#....#...#.#','.#...######...#.','.#............#.',
+    '..#..........#..','...##......##...','.....######.....','................',
+  ],
+};
+function iconToBytes(rows) {
+  // 16 rows, 2 bytes each. byte 0 = cols 0..7 (MSB=col0), byte 1 = cols 8..15.
+  const out = [];
+  for (const r of rows) {
+    let hi = 0, lo = 0;
+    for (let i = 0; i < 8; i++) if (r[i] === '#') hi |= 0x80 >> i;
+    for (let i = 0; i < 8; i++) if (r[8 + i] === '#') lo |= 0x80 >> i;
+    out.push(hi, lo);
+  }
+  return out;
+}
+function buildIcons() {
+  const out = [];
+  for (const k of ['arrow', 'heart', 'check', 'smiley']) out.push(...iconToBytes(ICON_ART[k]));
+  return Uint8Array.from(out); // 128 bytes
+}
+
+/* ---- struct array: 16 records × 4 bytes = [1 shape byte][3 noise] ---- */
+function buildStructArray() {
+  const rnd = lcg(0xC0FFEE);
+  const out = [];
+  for (let r = 0; r < 16; r++) {
+    out.push(0x80 >> (r % 8));        // the shape column: a marching diagonal
+    out.push(rnd(), rnd(), rnd());    // payload the reader wants to skip
+  }
+  return Uint8Array.from(out); // 64 bytes; width 1 / stride 4 isolates the shape
+}
+
+/* ---- padded framebuffer: 104×48 content stored 16 bytes/row (3 pad bytes) ---- */
+const FB = { contentBytes: 13, strideBytes: 16, rows: 48, wPx: 104 };
+function buildFramebuffer() {
+  const { strideBytes, rows, wPx } = FB;
+  const buf = new Uint8Array(strideBytes * rows);
+  const set = (x, y) => {
+    if (x < 0 || x >= wPx || y < 0 || y >= rows) return;
+    buf[y * strideBytes + (x >> 3)] |= 0x80 >> (x & 7);
+  };
+  for (let x = 0; x < wPx; x++) { set(x, 0); set(x, rows - 1); }        // top/bottom border
+  for (let y = 0; y < rows; y++) { set(0, y); set(wPx - 1, y); }         // left/right border
+  for (let x = 0; x < wPx; x++) set(x, Math.round((x * (rows - 1)) / (wPx - 1))); // diagonal
+  for (let y = 10; y < 22; y++) for (let x = 68; x < 94; x++) set(x, y); // filled block
+  return buf; // correct view: width 13, stride 16
+}
+
+/* ---- bit-order ramp: 256 bytes, one lit pixel marching right ---- */
+function buildRamp() {
+  const out = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) out[i] = 0x80 >> (i & 7);
+  return out; // width 1 / stride 1 -> a clean 8-step staircase (MSB) vs zigzag (LSB)
+}
+
+const DATASETS = {
+  font:  { label: 'Font 8×8 ROM',        buf: buildFontROM(),     fit: { width: 1,  stride: 1,  height: 48 },
+           note: 'A font ROM is 8 bytes per glyph, glyphs back to back. Read as a 1-glyph-wide column (Width 1). Origin +8 steps one glyph.' },
+  icons: { label: 'Icons 16×16',         buf: buildIcons(),       fit: { width: 2,  stride: 2,  height: 64 },
+           note: '2 bytes per row, 16 rows per icon, 4 icons. Width 2 / Stride 2 shows them stacked.' },
+  struct:{ label: 'Struct array',        buf: buildStructArray(), fit: { width: 1,  stride: 4,  height: 16 },
+           note: '16 records of 4 bytes: 1 shape byte + 3 payload. Width 1 / Stride 4 isolates the shape column; Width 4 shows the payload noise too.' },
+  fb:    { label: 'Padded framebuffer',  buf: buildFramebuffer(), fit: { width: 13, stride: 16, height: 48 },
+           note: '104-px content stored 16 bytes/row (3 pad bytes). Correct view: Width 13 / Stride 16. Stride 13 shears it; Stride/Width 16 shows pad garbage on the right.' },
+  ramp:  { label: 'Bit-order ramp',      buf: buildRamp(),        fit: { width: 1,  stride: 1,  height: 64 },
+           note: 'byte i has one bit set at position i mod 8. MSB-first → a clean staircase. LSB-first → a mirrored zigzag.' },
+};
+
+/* ---- page state + rendering ---- */
+const state = {
+  ds: null, origin: 0,
+  width: 1, stride: 1, height: 48, zoom: 3,
+  invert: false, bitOrder: 'msb', order: 'row',
+};
+let prev = null;
+
+const $ = (s) => document.querySelector(s);
+const cv = $('#out');
+
+function clampAll() {
+  state.width = Math.max(1, state.width | 0);
+  state.stride = Math.max(state.width, state.stride | 0);
+  state.height = Math.max(1, Math.min(4096, state.height | 0));
+  state.zoom = Math.max(1, Math.min(3, state.zoom | 0));
+  const buf = DATASETS[state.ds].buf;
+  state.origin = Math.max(0, Math.min(buf.length, state.origin | 0));
+}
+
+function paint(bits, w, h) {
+  const off = paint._off || (paint._off = document.createElement('canvas'));
+  off.width = Math.max(1, w); off.height = Math.max(1, h);
+  const octx = off.getContext('2d');
+  const img = octx.createImageData(off.width, off.height);
+  // theme-ish colours; invert already applied in the bits, so fg/bg are fixed here
+  const FG = [31, 35, 48], BG = [251, 251, 253];
+  for (let i = 0; i < w * h; i++) {
+    const on = bits[i] === 1, p = i * 4;
+    img.data[p] = on ? FG[0] : BG[0];
+    img.data[p + 1] = on ? FG[1] : BG[1];
+    img.data[p + 2] = on ? FG[2] : BG[2];
+    img.data[p + 3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  const z = state.zoom;
+  cv.width = Math.max(1, w * z); cv.height = Math.max(1, h * z);
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0, 0, w * z, h * z);
+}
+
+function render(changeLabel) {
+  clampAll();
+  const p = { width: state.width, stride: state.stride, height: state.height,
+              invert: state.invert, bitOrder: state.bitOrder, order: state.order };
+  const buf = DATASETS[state.ds].buf;
+  const span = bitmap.rowByteSpan(p);
+  const slice = buf.subarray(state.origin);
+  const out = bitmap.packBitmap(slice, p);
+  paint(out.bits, out.w, out.h);
+
+  const gap = state.stride - state.width;
+  const hex = (n) => '0x' + n.toString(16).toUpperCase();
+  const rows = [
+    ['data set', DATASETS[state.ds].label],
+    ['buffer bytes', String(buf.length)],
+    ['origin', state.origin + '  (' + hex(state.origin) + ')'],
+    ['width', state.width + ' B  → ' + (state.order === 'row' ? state.width * 8 + ' px' : state.width + ' px')],
+    ['stride', state.stride + ' B'],
+    ['gap bytes/row', gap === 0 ? '0' : gap + '  (skipped)'],
+    ['height', state.height + (state.order === 'row' ? ' px' : ' pages → ' + state.height * 8 + ' px')],
+    ['image', out.w + ' × ' + out.h + ' px  @' + state.zoom + '× = ' + out.w * state.zoom + ' × ' + out.h * state.zoom],
+    ['read span', span + ' B   (end ' + hex(state.origin + span) + ')'],
+    ['bytes read', String(out.bytesRead)],
+    ['bytes missing', String(out.bytesMissing)],
+    ['bit order', state.bitOrder === 'msb' ? 'MSB-first  (decision)' : 'LSB-first  (fog preview)'],
+    ['order', state.order === 'row' ? 'row-major  (decision)' : 'column-major  (fog preview)'],
+    ['invert', state.invert ? 'on' : 'off'],
+  ];
+  $('#state').innerHTML = rows.map(([k, v]) => {
+    let cls = '';
+    if (k === 'bytes missing' && out.bytesMissing > 0) cls = ' class="warn"';
+    else if (k === 'gap bytes/row' && gap > 0) cls = ' class="em"';
+    else if ((k === 'bit order' || k === 'order') && v.includes('fog')) cls = ' class="warn"';
+    return '<dt>' + k + '</dt><dd' + cls + '>' + v + '</dd>';
+  }).join('');
+
+  const warnMissing = out.bytesMissing > 0;
+  const box = $('#changed');
+  box.className = 'changed' + (warnMissing ? ' warnrow' : '');
+  box.innerHTML = (changeLabel ? '<b>' + changeLabel + '</b> · ' : '') +
+    (warnMissing
+      ? out.bytesMissing + ' byte(s) past the buffer end are drawn as background (EOF handling is #72’s call).'
+      : DATASETS[state.ds].note);
+  syncButtons();
+  prev = JSON.parse(JSON.stringify(state));
+}
+
+function loadDataset(ds) {
+  state.ds = ds;
+  Object.assign(state, DATASETS[ds].fit);
+  state.origin = 0;
+  render('Loaded ' + DATASETS[ds].label);
+}
+
+const ACTIONS = {
+  'w-1': () => state.width--,
+  'w+1': () => state.width++,
+  'stride=width': () => (state.stride = state.width),
+  's-1': () => state.stride--,
+  's+1': () => state.stride++,
+  'h-4': () => (state.height -= 4),
+  'h+4': () => (state.height += 4),
+  'h=fit': () => (state.height = DATASETS[state.ds].fit.height),
+  'o-8': () => (state.origin -= 8),
+  'o-1': () => state.origin--,
+  'o+1': () => state.origin++,
+  'o+8': () => (state.origin += 8),
+  'o=0': () => (state.origin = 0),
+  'o=end': () => {
+    const p = { width: state.width, stride: state.stride, height: state.height };
+    state.origin = Math.max(0, DATASETS[state.ds].buf.length - bitmap.rowByteSpan(p));
+  },
+  'z=1': () => (state.zoom = 1),
+  'z=2': () => (state.zoom = 2),
+  'z=3': () => (state.zoom = 3),
+  invert: () => (state.invert = !state.invert),
+  bitorder: () => (state.bitOrder = state.bitOrder === 'msb' ? 'lsb' : 'msb'),
+  order: () => (state.order = state.order === 'row' ? 'col' : 'row'),
+};
+const ACTION_LABEL = {
+  'w-1': 'Width − 1', 'w+1': 'Width + 1', 'stride=width': 'Stride = Width',
+  's-1': 'Stride − 1', 's+1': 'Stride + 1', 'h-4': 'Height − 4', 'h+4': 'Height + 4', 'h=fit': 'Height = fit',
+  'o-8': 'Origin − 8', 'o-1': 'Origin − 1', 'o+1': 'Origin + 1', 'o+8': 'Origin + 8', 'o=0': 'Origin ⇤ 0', 'o=end': 'Origin ⇥ end',
+  'z=1': 'Zoom 1×', 'z=2': 'Zoom 2×', 'z=3': 'Zoom 3×',
+  invert: 'Toggle invert', bitorder: 'Toggle bit order', order: 'Toggle order',
+};
+function doAction(act) {
+  if (!state.ds) { loadDataset('font'); return; }
+  ACTIONS[act]();
+  render(ACTION_LABEL[act] || act);
+}
+
+function syncButtons() {
+  document.querySelectorAll('[data-ds]').forEach((b) => b.classList.toggle('on', b.dataset.ds === state.ds));
+  const inv = document.querySelector('[data-act="invert"]');
+  inv.classList.toggle('warn-on', state.invert);
+  const bo = document.querySelector('[data-act="bitorder"]');
+  bo.textContent = 'bit order: ' + (state.bitOrder === 'msb' ? 'MSB-first' : 'LSB-first (fog)');
+  bo.classList.toggle('warn-on', state.bitOrder !== 'msb');
+  const or = document.querySelector('[data-act="order"]');
+  or.textContent = 'order: ' + (state.order === 'row' ? 'row-major' : 'column-major (fog)');
+  or.classList.toggle('warn-on', state.order !== 'row');
+  document.querySelectorAll('[data-act^="z="]').forEach((b) =>
+    b.classList.toggle('on', b.dataset.act === 'z=' + state.zoom));
+}
+
+document.querySelectorAll('[data-ds]').forEach((b) =>
+  b.addEventListener('click', () => loadDataset(b.dataset.ds)));
+document.querySelectorAll('[data-act]').forEach((b) =>
+  b.addEventListener('click', () => doAction(b.dataset.act)));
+
+/* ---- walkthroughs ---- */
+const SCENARIOS = [
+  {
+    name: 'Font ROM, MSB-first',
+    blurb: 'Read an 8×8 font ROM as a 1-glyph-wide column. Watch that the letters are upright and correctly ' +
+      'handed — that is MSB-first (bit 7 = the leftmost pixel). Then flip to the LSB-first fog preview and ' +
+      'see every glyph mirror left-to-right; flip back.',
+    watch: 'Upright “A B C …” under MSB-first; each glyph mirrored under LSB-first; no vertical flip either way.',
+    steps: [
+      ['Load Font ROM', () => loadDataset('font')],
+      ['Zoom 3×', () => doAction('z=3')],
+      ['Origin + 8 (next glyph)', () => doAction('o+8')],
+      ['Origin + 8', () => doAction('o+8')],
+      ['Origin + 8', () => doAction('o+8')],
+      ['Flip to LSB-first', () => doAction('bitorder')],
+      ['Back to MSB-first', () => doAction('bitorder')],
+    ],
+  },
+  {
+    name: 'Dial in alignment (Stride)',
+    blurb: 'The padded framebuffer holds 104 px of content in 16 bytes/row — 3 pad bytes per row. Start with ' +
+      'Stride = Width = 16 (the pad bytes render as noise down the right edge). Set Width 13, then walk Stride ' +
+      '13 → 16. At Stride 16 the border snaps square: the trailing stride−width bytes are skipped.',
+    watch: 'A clean rectangle + diagonal only at Width 13 / Stride 16. Stride 13 shears the image; Stride 14–15 ' +
+      'still lean; Width/Stride 16 shows pad-byte garbage on the right.',
+    steps: [
+      ['Load Padded framebuffer', () => loadDataset('fb')],
+      ['Stride = Width (both 13)', () => { state.width = 13; state.stride = 13; render('Width 13 / Stride 13'); }],
+      ['Stride + 1 → 14', () => doAction('s+1')],
+      ['Stride + 1 → 15', () => doAction('s+1')],
+      ['Stride + 1 → 16 (correct)', () => doAction('s+1')],
+      ['Width + 1 → 14 (pad leaks in)', () => doAction('w+1')],
+      ['Back to Width 13', () => doAction('w-1')],
+    ],
+  },
+  {
+    name: 'Isolate one column (Stride > Width)',
+    blurb: 'A 16-record array, each record 4 bytes: 1 shape byte then 3 payload bytes. Width 4 / Stride 4 shows ' +
+      'the shape plus payload noise. Drop Width to 1, keep Stride 4: only the shape column is drawn — one column ' +
+      'of a wider repeating structure, in isolation (the CONTEXT.md use for Stride).',
+    watch: 'Width 4: a diagonal marker in a field of noise. Width 1 / Stride 4: just the clean diagonal, noise gone.',
+    steps: [
+      ['Load Struct array', () => loadDataset('struct')],
+      ['Zoom 3×', () => doAction('z=3')],
+      ['Width 4 (see payload noise)', () => { state.width = 4; state.stride = 4; render('Width 4 / Stride 4'); }],
+      ['Width − 1 → 3', () => doAction('w-1')],
+      ['Width − 1 → 2', () => doAction('w-1')],
+      ['Width − 1 → 1 (shape only)', () => doAction('w-1')],
+    ],
+  },
+  {
+    name: 'Invert stays scoped',
+    blurb: 'Toggle invert on the icons. It must swap foreground/background bit values and nothing else — no ' +
+      'geometry change, no effect on Width/Stride/Origin.',
+    watch: 'Icons go dark-on-light ↔ light-on-dark. Shapes, position and the state panel numbers are otherwise identical.',
+    steps: [
+      ['Load Icons', () => loadDataset('icons')],
+      ['Zoom 3×', () => doAction('z=3')],
+      ['Invert on', () => doAction('invert')],
+      ['Invert off', () => doAction('invert')],
+    ],
+  },
+  {
+    name: 'Zoom stays crisp',
+    blurb: 'Integer Zoom 1 → 2 → 3 with smoothing off and image-rendering: pixelated. Pixels must stay hard ' +
+      'squares at every step — no blur, no half-pixels.',
+    watch: 'Every pixel is a sharp square edge at 1×, 2× and 3×. The canvas grows by exact integer multiples.',
+    steps: [
+      ['Load Font ROM', () => loadDataset('font')],
+      ['Zoom 1×', () => doAction('z=1')],
+      ['Zoom 2×', () => doAction('z=2')],
+      ['Zoom 3×', () => doAction('z=3')],
+    ],
+  },
+  {
+    name: 'Does the fog need to move?',
+    blurb: 'The map keeps LSB-first bit order and column-major packing in the fog. Use the ramp to see both ' +
+      'transforms concretely, then decide: is there a real font/icon format in hand that is stored this way? ' +
+      'If yes → ticket it now. If no → it stays fog.',
+    watch: 'Ramp: clean staircase (MSB, row-major). LSB-first → zigzag. Column-major → the staircase becomes a ' +
+      'vertical-strip pattern. Both are clearly separate, well-defined transforms — the question is only whether ' +
+      'any in-hand data needs them yet.',
+    steps: [
+      ['Load Bit-order ramp', () => loadDataset('ramp')],
+      ['Zoom 3×', () => doAction('z=3')],
+      ['Flip to LSB-first', () => doAction('bitorder')],
+      ['Back to MSB-first', () => doAction('bitorder')],
+      ['Flip to column-major', () => doAction('order')],
+      ['Back to row-major', () => doAction('order')],
+    ],
+  },
+];
+
+let activeTab = 0;
+const stepDone = SCENARIOS.map(() => 0);
+function renderTabs() {
+  $('#tabs').innerHTML = SCENARIOS.map((s, i) =>
+    '<div class="tab' + (i === activeTab ? ' active' : '') + '" data-tab="' + i + '">' + (i + 1) + '. ' + s.name + '</div>').join('');
+  document.querySelectorAll('[data-tab]').forEach((t) =>
+    t.addEventListener('click', () => { activeTab = +t.dataset.tab; renderScenario(); renderTabs(); }));
+}
+function renderScenario() {
+  const s = SCENARIOS[activeTab];
+  const done = stepDone[activeTab];
+  $('#scenario').innerHTML =
+    '<p>' + s.blurb + '</p>' +
+    '<p class="watch"><b>Watch for:</b> ' + s.watch + '</p>' +
+    '<div class="steps">' + s.steps.map((st, i) =>
+      '<button data-step="' + i + '" class="' + (i < done ? 'done' : i === done ? 'next' : '') + '">' +
+      (i + 1) + '. ' + st[0] + '</button>').join('') + '</div>' +
+    '<div class="verdict"><b>Verdict for this scenario:</b> ' +
+      '<span contenteditable="true" style="outline:none;border-bottom:1px dashed #b9bdd0;min-width:200px;display:inline-block">click to type…</span></div>';
+  document.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => {
+    const i = +b.dataset.step;
+    SCENARIOS[activeTab].steps[i][1]();
+    stepDone[activeTab] = Math.max(stepDone[activeTab], i + 1);
+    if (stepDone[activeTab] > SCENARIOS[activeTab].steps.length) stepDone[activeTab] = 0;
+    renderScenario();
+  }));
+}
+$('#tabs') && renderTabs();
+renderScenario();
+
+/* start empty-but-safe: show the font so the page is never blank */
+loadDataset('font');
+</script>
+</body>
+</html>
