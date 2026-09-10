@@ -30,9 +30,13 @@ export default defineConfigWithVueTs(
     ...pluginVitest.configs.recommended,
     files: ['src/**/__tests__/*'],
     rules: {
-      // `expectScopedStyleHook` (src/components/shell/__tests__/helpers.ts) is a
-      // custom assertion wrapper — teach the rule it counts as an assertion.
-      'vitest/expect-expect': ['error', { assertFunctionNames: ['expect', 'expectScopedStyleHook'] }],
+      // `expectScopedStyleHook` (src/components/shell/__tests__/helpers.ts) and
+      // `expectOriginAt` (components/__tests__/BitmapPanel.spec.ts) are custom
+      // assertion wrappers — teach the rule they count as assertions.
+      'vitest/expect-expect': [
+        'error',
+        { assertFunctionNames: ['expect', 'expectScopedStyleHook', 'expectOriginAt'] },
+      ],
     },
   },
 

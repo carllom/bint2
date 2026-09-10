@@ -6,7 +6,8 @@ import type { VueWrapper } from '@vue/test-utils'
 import { ByteSourceError, FileByteSource, packBitmap, rowByteSpan } from '@/core'
 import type { ByteSource, PackBitmapParams, PackedBitmap } from '@/core'
 import { useDocumentStore } from '@/stores/document'
-import { usePreferencesStore } from '@/stores/preferences'
+import { PREFERENCES_STORAGE_KEY, usePreferencesStore } from '@/stores/preferences'
+import { useBitmapStore } from '@/stores/bitmap'
 import BitmapPanel from '@/components/BitmapPanel.vue'
 import HomeView from '@/views/HomeView.vue'
 
@@ -86,6 +87,20 @@ const windowAt = (origin: number, span: number): Uint8Array =>
 function bitmapContainer(app: VueWrapper) {
   return app.find('[data-region="bitmap"]')
 }
+
+/** Click the Bitmap accordion trigger — closes the section when open, reopens it
+ *  when closed. `unmount-on-hide` means a close destroys `BitmapPanel`. */
+async function toggleBitmapSection(app: VueWrapper): Promise<void> {
+  await app.findAll('button.accordion-trigger')[1]!.trigger('click')
+  await flushPromises()
+}
+
+const statusText = (app: VueWrapper): string =>
+  app.find('[data-field="bitmap-status"]').text()
+
+const lockToggle = (app: VueWrapper) => app.find('[data-field="bitmap-lock-toggle"]')
+
+const bitsOf = (app: VueWrapper): number[] => Array.from(frameOf(app)!.bits)
 
 beforeEach(() => {
   pinia = createPinia()
@@ -348,5 +363,238 @@ describe('the Bitmap Panel — the Height control (plan §4.2)', () => {
     ;(input.element as HTMLInputElement).value = '5'
     await input.trigger('change')
     expect(usePreferencesStore(pinia).bitmapHeight).toBe(32) // clamped up to the floor
+  })
+})
+
+describe('the Bitmap Panel — lock the Origin (plan §4.4, ADR-0008)', () => {
+  it('L freezes the Origin at the Cursor and the render stops tracking it', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    const store = useDocumentStore(pinia)
+    store.setCursor(100)
+    await flushPromises()
+
+    const locked = bitsOf(app)
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    await flushPromises()
+
+    expect(useBitmapStore(pinia).originLocked).toBe(true)
+    expect(useBitmapStore(pinia).lockedOffset).toBe(100)
+    expect(statusText(app)).toBe('Locked · 0x64')
+
+    // The Cursor moves anywhere — near, far, off the end — and nothing changes.
+    store.setCursor(2000)
+    await flushPromises()
+    expect(bitsOf(app)).toEqual(locked)
+    store.setCursor(4096)
+    await flushPromises()
+    expect(bitsOf(app)).toEqual(locked)
+  })
+
+  it('L again snaps the Origin to the Cursor’s current offset and resumes Follow', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    const store = useDocumentStore(pinia)
+    store.setCursor(100)
+    await flushPromises()
+
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    store.setCursor(300) // moved while locked
+    await flushPromises()
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    await flushPromises()
+
+    expect(useBitmapStore(pinia).originLocked).toBe(false)
+    expect(useBitmapStore(pinia).lockedOffset).toBeNull()
+    expect(statusText(app)).toBe('Following cursor')
+
+    const g = geometry(app)
+    expect(g.origin).toBe(300)
+    const expected = packBitmap(windowAt(300, g.span), g.packParams)
+    expect(bitsOf(app)).toEqual(Array.from(expected.bits))
+  })
+
+  it('the header toggle locks and follows just like the L key', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(0x2a)
+    await flushPromises()
+
+    expect(lockToggle(app).text()).toBe('Lock Origin')
+    await lockToggle(app).trigger('click')
+    await flushPromises()
+    expect(useBitmapStore(pinia).originLocked).toBe(true)
+    expect(statusText(app)).toBe('Locked · 0x2A')
+    expect(lockToggle(app).text()).toBe('Follow Cursor')
+
+    await lockToggle(app).trigger('click')
+    await flushPromises()
+    expect(useBitmapStore(pinia).originLocked).toBe(false)
+    expect(statusText(app)).toBe('Following cursor')
+  })
+
+  it('Lock is unavailable with no Cursor — no toggle, L inert', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+
+    expect(lockToggle(app).exists()).toBe(false)
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    expect(useBitmapStore(pinia).originLocked).toBe(false)
+  })
+
+  it('keeps the lock (mode + offset) across closing and reopening the section', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(512)
+    await flushPromises()
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    await flushPromises()
+    const locked = bitsOf(app)
+
+    await toggleBitmapSection(app) // close — BitmapPanel unmounts
+    expect(app.findComponent(BitmapPanel).exists()).toBe(false)
+    await toggleBitmapSection(app) // reopen — fresh mount
+
+    expect(useBitmapStore(pinia).originLocked).toBe(true)
+    expect(useBitmapStore(pinia).lockedOffset).toBe(512)
+    expect(statusText(app)).toBe('Locked · 0x200')
+    expect(bitsOf(app)).toEqual(locked)
+  })
+})
+
+describe('the Bitmap Panel — Origin nudge keys (plan §4.5)', () => {
+  async function lockedAt(app: VueWrapper, offset: number): Promise<void> {
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(offset)
+    await flushPromises()
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    await flushPromises()
+  }
+
+  /** Assert the frame equals the packed window at `origin`, and the Cursor never moved. */
+  function expectOriginAt(app: VueWrapper, origin: number, cursorStayedAt: number): void {
+    const g = geometry(app)
+    const expected = packBitmap(windowAt(origin, g.span), g.packParams)
+    expect(bitsOf(app)).toEqual(Array.from(expected.bits))
+    expect(useDocumentStore(pinia).selection?.focus).toBe(cursorStayedAt)
+    expect(useBitmapStore(pinia).lockedOffset).toBe(origin)
+  }
+
+  it('←/→ nudge the Origin by ∓1 byte without moving the Cursor', async () => {
+    const app = mountApp()
+    await lockedAt(app, 1000)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'ArrowRight' })
+    await flushPromises()
+    expectOriginAt(app, 1001, 1000)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'ArrowLeft' })
+    await bitmapContainer(app).trigger('keydown', { code: 'ArrowLeft' })
+    await flushPromises()
+    expectOriginAt(app, 999, 1000)
+  })
+
+  it('↑/↓ nudge the Origin by ∓ one Stride (one bitmap row)', async () => {
+    const app = mountApp()
+    await lockedAt(app, 1000)
+    const stride = geometry(app).stride
+
+    await bitmapContainer(app).trigger('keydown', { code: 'ArrowDown' })
+    await flushPromises()
+    expectOriginAt(app, 1000 + stride, 1000)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'ArrowUp' })
+    await flushPromises()
+    expectOriginAt(app, 1000, 1000)
+  })
+
+  it('PageUp/PageDown nudge by ∓ (Stride × visible rows)', async () => {
+    const app = mountApp()
+    await lockedAt(app, 1500)
+    const { stride, height } = geometry(app)
+    const page = stride * height
+
+    await bitmapContainer(app).trigger('keydown', { code: 'PageDown' })
+    await flushPromises()
+    expectOriginAt(app, 1500 + page, 1500)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'PageUp' })
+    await flushPromises()
+    expectOriginAt(app, 1500, 1500)
+  })
+
+  it('Home → 0, End → size (clamped to size, not size − 1)', async () => {
+    const app = mountApp()
+    await lockedAt(app, 1000)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'Home' })
+    await flushPromises()
+    expectOriginAt(app, 0, 1000)
+    expect(statusText(app)).toBe('Locked · 0x00')
+
+    await bitmapContainer(app).trigger('keydown', { code: 'End' })
+    await flushPromises()
+    expect(useBitmapStore(pinia).lockedOffset).toBe(PATTERN.length)
+    expect(useDocumentStore(pinia).selection?.focus).toBe(1000)
+  })
+
+  it('nudges clamp to [0, size] — ← at 0 stays, → past size stops at size', async () => {
+    const app = mountApp()
+    await lockedAt(app, 0)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'ArrowLeft' })
+    await flushPromises()
+    expect(useBitmapStore(pinia).lockedOffset).toBe(0)
+  })
+
+  it('the arrow / page keys are inert in Follow mode', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(1000)
+    await flushPromises()
+    const following = bitsOf(app)
+
+    for (const code of ['ArrowRight', 'ArrowUp', 'PageDown', 'Home', 'End']) {
+      await bitmapContainer(app).trigger('keydown', { code })
+    }
+    await flushPromises()
+    expect(useDocumentStore(pinia).selection?.focus).toBe(1000)
+    expect(bitsOf(app)).toEqual(following)
+  })
+
+  it('does not arm on accordion-trigger focus', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(1000)
+    await flushPromises()
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' }) // lock first
+    await flushPromises()
+    const locked = bitsOf(app)
+
+    const trigger = app.findAll('button.accordion-trigger')[1]!
+    await trigger.trigger('keydown', { code: 'ArrowRight' })
+    await trigger.trigger('keydown', { code: 'KeyL' })
+    await flushPromises()
+
+    expect(useBitmapStore(pinia).originLocked).toBe(true)
+    expect(bitsOf(app)).toEqual(locked)
+  })
+
+  it('writes nothing about the mode or the offset to preferences', async () => {
+    const app = mountApp()
+    await openWithBitmap(new FileByteSource(fileOf(PATTERN)))
+    useDocumentStore(pinia).setCursor(1000)
+    await flushPromises()
+    const before = localStorage.getItem(PREFERENCES_STORAGE_KEY)
+
+    await bitmapContainer(app).trigger('keydown', { code: 'KeyL' })
+    await bitmapContainer(app).trigger('keydown', { code: 'ArrowRight' })
+    await bitmapContainer(app).trigger('keydown', { code: 'PageDown' })
+    await flushPromises()
+
+    expect(localStorage.getItem(PREFERENCES_STORAGE_KEY)).toBe(before)
+    const persisted = JSON.parse(localStorage.getItem(PREFERENCES_STORAGE_KEY) ?? '{}')
+    expect(Object.keys(persisted)).not.toContain('originLocked')
+    expect(Object.keys(persisted)).not.toContain('lockedOffset')
   })
 })

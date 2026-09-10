@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
-import { packBitmap, rowByteSpan } from '@/core'
+import { packBitmap, rowByteSpan, toHex } from '@/core'
 import type { PackedBitmap } from '@/core'
 import { useBytesAt } from '@/composables/useBytesAt'
+import { useBitmapStore } from '@/stores/bitmap'
 import { useDocumentStore } from '@/stores/document'
 import {
   BITMAP_HEIGHT_MAX,
@@ -12,10 +13,13 @@ import {
   usePreferencesStore,
 } from '@/stores/preferences'
 
-// The Bitmap Panel (CONTEXT.md, plan-phase1.75.md §4) — P1.75-M5 (#81) ships
-// **Follow mode only**: a live 1-bpp render of a contiguous byte run that
-// follows the Cursor byte-for-byte. Locking the Origin is #82; the honest
-// EOF-fill / pending / dead-source overlay passes are #83.
+// The Bitmap Panel (CONTEXT.md, plan-phase1.75.md §4). #81 shipped Follow-mode
+// render; #82 (this ticket) adds the follow/lock **Origin** state machine
+// (ADR-0008): `L` / the header toggle freezes the Origin at the Cursor, the
+// section's arrow / page / Home-End keys nudge a locked Origin, and the mode +
+// offset live in {@link useBitmapStore} — session-only, never persisted, and
+// surviving the section's `unmount-on-hide`. The honest EOF-fill / pending /
+// dead-source overlay passes are #83.
 //
 // The render is `packBitmap` (the pure #79 transform) of the bytes at the
 // Origin, drawn to a `<canvas>` via `putImageData` and upscaled by an **integer**
@@ -38,12 +42,33 @@ import {
 
 const documentStore = useDocumentStore()
 const preferences = usePreferencesStore()
+const bitmap = useBitmapStore()
 
-/** The Bitmap needs an Origin; in Follow mode it is the Cursor's byte offset
- *  exactly, unaligned to Width or Stride (plan §4.4). `null` before any click —
- *  the "No Cursor yet" state (plan §3.4), mirroring the Inspector. */
-const origin = computed<number | null>(() => documentStore.selection?.focus ?? null)
-const hasCursor = computed(() => origin.value !== null)
+/** The Cursor's byte offset — the focus end of the one Selection, `null` before
+ *  any click. In Follow mode this *is* the Origin. */
+const cursorOffset = computed<number | null>(() => documentStore.selection?.focus ?? null)
+
+/** Follow (default) ‖ Lock (plan §4.4, ADR-0008). Session-only; it lives in the
+ *  store so it survives the section's `unmount-on-hide`. */
+const locked = computed(() => bitmap.originLocked)
+
+/** The document byte offset the top-left pixel maps to. Follow: the Cursor,
+ *  byte-for-byte, unaligned to Width or Stride. Lock: the frozen / nudged
+ *  offset, with no Cursor input. `null` before any click — the "No Cursor yet"
+ *  state (plan §3.4), mirroring the Inspector. */
+const origin = computed<number | null>(() =>
+  locked.value ? bitmap.lockedOffset : cursorOffset.value,
+)
+
+/** There is an Origin to render — a Cursor in Follow, or a locked offset. The
+ *  "No Cursor yet" hint and every fill state key off this (plan §4.4). */
+const hasOrigin = computed(() => origin.value !== null)
+
+/** The read-only header state line (plan §4.4): "Following cursor" or
+ *  "Locked · 0x…". There is no typed Origin field. */
+const statusText = computed(() =>
+  locked.value ? `Locked · 0x${toHex(bitmap.lockedOffset ?? 0)}` : 'Following cursor',
+)
 
 // ── Render parameters (plan §4.2) ──────────────────────────────────────────
 // Width, Zoom and invert are the persisted values as-is. Stride is *derived* —
@@ -233,29 +258,97 @@ function onInvert(event: Event): void {
   preferences.setBitmapInvert((event.target as HTMLInputElement).checked)
 }
 
+// ── Follow / Lock the Origin (plan §4.4, ADR-0008) ────────────────────────
+/** `L` and the header toggle. Lock freezes the Origin at the current Cursor
+ *  offset; toggling back snaps the Origin to the Cursor's *current* offset — the
+ *  `origin` computed re-reads `cursorOffset`, so "snap back" is automatic — and
+ *  resumes tracking. Inert with no Cursor (`toggleLock` is only reachable while
+ *  `hasOrigin`). */
+function toggleLock(): void {
+  if (locked.value) {
+    bitmap.followCursor()
+  } else if (cursorOffset.value !== null) {
+    bitmap.lockOrigin(cursorOffset.value)
+  }
+}
+
+/** Move a locked Origin, clamped to `[0, size]` — Origin `== size` is a legal
+ *  "nudged off the end" state (plan §4.10). Never touches the Cursor. */
+function moveOrigin(to: number): void {
+  bitmap.setLockedOffset(clamp(to, 0, documentStore.fileSize))
+}
+
 // ── Keys (plan §4.5, bound by `KeyboardEvent.code`, layout-independent) ────
-// `Comma` / `Period` = Width ∓ 1; `Shift`+`Comma` / `Shift`+`Period` = Stride
-// ∓ 1 (steps `bitmapStrideOffset`, clamped ≥ 0). Armed only while the content is
-// focused and a Cursor exists; inert when a control has focus so `.` typed in a
-// number field is not stolen.
+// Either mode: `Comma` / `Period` = Width ∓ 1; `Shift` for Stride ∓ 1 (steps
+// `bitmapStrideOffset`, clamped ≥ 0); `KeyL` toggles Lock / Follow. Locked only:
+// `←→` = Origin ∓ 1 byte, `↑↓` = ∓ one Stride (a bitmap row), `PageUp`/`Down` =
+// ∓ one canvas (Stride × the Height rows it always draws, plan §4.10), `Home` /
+// `End` = Origin → 0 / `size`. Armed only while the content is focused and an
+// Origin exists; inert when a control has focus so `.` typed in a number field
+// is not stolen.
 function onKeydown(event: KeyboardEvent): void {
-  if (!hasCursor.value) {
+  if (!hasOrigin.value) {
     return
   }
   const tag = (event.target as HTMLElement).tagName
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
     return
   }
-  if (event.code !== 'Comma' && event.code !== 'Period') {
+
+  if (event.code === 'Comma' || event.code === 'Period') {
+    event.preventDefault()
+    const delta = event.code === 'Comma' ? -1 : 1
+    if (event.shiftKey) {
+      preferences.setBitmapStrideOffset(Math.max(0, preferences.bitmapStrideOffset + delta))
+    } else {
+      preferences.setBitmapWidth(Math.max(1, preferences.bitmapWidth + delta))
+    }
     return
   }
-  event.preventDefault()
-  const delta = event.code === 'Comma' ? -1 : 1
-  if (event.shiftKey) {
-    preferences.setBitmapStrideOffset(Math.max(0, preferences.bitmapStrideOffset + delta))
-  } else {
-    preferences.setBitmapWidth(Math.max(1, preferences.bitmapWidth + delta))
+
+  if (event.code === 'KeyL') {
+    event.preventDefault()
+    toggleLock()
+    return
   }
+
+  // Origin nudges — locked mode only; in Follow the Cursor is the linkage and
+  // these keys are inert (plan §4.4).
+  if (!locked.value || bitmap.lockedOffset === null) {
+    return
+  }
+  const here = bitmap.lockedOffset
+  let target: number
+  switch (event.code) {
+    case 'ArrowLeft':
+      target = here - 1
+      break
+    case 'ArrowRight':
+      target = here + 1
+      break
+    case 'ArrowUp':
+      target = here - stride.value
+      break
+    case 'ArrowDown':
+      target = here + stride.value
+      break
+    case 'PageUp':
+      target = here - stride.value * height.value
+      break
+    case 'PageDown':
+      target = here + stride.value * height.value
+      break
+    case 'Home':
+      target = 0
+      break
+    case 'End':
+      target = documentStore.fileSize
+      break
+    default:
+      return
+  }
+  event.preventDefault()
+  moveOrigin(target)
 }
 
 function focusSelf(event: PointerEvent): void {
@@ -280,12 +373,25 @@ defineExpose({ frame })
     @pointerdown="focusSelf"
     @keydown="onKeydown"
   >
-    <p v-if="!hasCursor" class="bitmap__hint" data-field="bitmap-no-cursor">
+    <p v-if="!hasOrigin" class="bitmap__hint" data-field="bitmap-no-cursor">
       No Cursor yet — click a byte in the grid to point the bitmap.
     </p>
 
     <template v-else>
-      <p class="bitmap__status" data-field="bitmap-status">Following cursor</p>
+      <!-- The header: the Lock Origin / Follow Cursor toggle (mirrored by `L`)
+           and the read-only state line (plan §4.4). No typed Origin field. -->
+      <div class="bitmap__header">
+        <button
+          type="button"
+          class="bitmap__lock"
+          :aria-pressed="locked"
+          data-field="bitmap-lock-toggle"
+          @click="toggleLock"
+        >
+          {{ locked ? 'Follow Cursor' : 'Lock Origin' }}
+        </button>
+        <p class="bitmap__status" data-field="bitmap-status">{{ statusText }}</p>
+      </div>
 
       <div class="bitmap__controls">
         <label class="bitmap__ctl">
@@ -375,6 +481,29 @@ defineExpose({ frame })
 
 .bitmap__hint {
   color: var(--color-fg-dim);
+}
+
+.bitmap__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1ch;
+}
+
+/* Matches the Inspector's `hex` control strip button (plan §3.5). */
+.bitmap__lock {
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.bitmap__lock[aria-pressed='true'] {
+  background: var(--color-selection);
+  color: var(--color-selection-fg);
 }
 
 .bitmap__status {
