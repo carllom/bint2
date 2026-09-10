@@ -8,17 +8,19 @@ import type { CodePage } from '@/core'
  * to **one `localStorage` key** — namespaced because GitHub Pages serves every
  * project from the shared `carllom.github.io` origin.
  *
- * Every setting the Inspector (#54), byte order (#55) and the code page (#56)
- * persist lives here. Explicit named setters, each rewriting the whole object;
- * a load-time per-field validation that falls anything invalid *or missing*
- * back to its default — **no version stamp, no migration machinery**, since
- * per-field validation already covers both a key a future version adds and a
- * value it changes. Versioning is added later only for a real migration.
+ * Phase 1.75 (`plan-phase1.75.md` §3.4, §4.2) grows the field set: the Inspector
+ * dock is gone; `collapsed` becomes the Sidebar-wide `sidebarCollapsed`; the
+ * Sidebar width and the two Panel open-states join; the five Bitmap render
+ * params join. Still **one key, one JSON object, per-field load validation, no
+ * version stamp, no migration machinery** — per-field validation already covers
+ * both a key a later version removes (the phase-1.5 `dock` / `collapsed`) and one
+ * it adds. Versioning is added later only for a real migration.
+ *
+ * Explicit named setters, each rewriting the whole object. Load-time validation
+ * falls anything invalid *or missing* back to its default; the next `persist()`
+ * rewrites the object without the strays.
  */
 export const PREFERENCES_STORAGE_KEY = 'bint2:preferences'
-
-/** Which Viewport edge the Inspector Panel docks to (#54, plan §3.1). */
-export type Dock = 'bottom' | 'right'
 
 /** The view-wide byte order every multi-byte numeric decode obeys (#55, ADR-0007). */
 export type ByteOrder = 'le' | 'be'
@@ -32,28 +34,54 @@ export type { CodePage }
 
 /** The full persisted shape — one JSON object under {@link PREFERENCES_STORAGE_KEY}. */
 export interface Preferences {
-  /** Inspector collapsed to its thin bar (#54). */
-  readonly collapsed: boolean
-  /** Which edge the Inspector docks to (#54). */
-  readonly dock: Dock
+  /** The whole Sidebar collapsed to nothing via the splitter (plan §3.3). */
+  readonly sidebarCollapsed: boolean
+  /**
+   * Sidebar width in CSS px (plan §3.2). Validated only for finiteness here;
+   * clamped to `[200, containerWidth − gridMin]` at the use site.
+   */
+  readonly sidebarWidth: number
+  /** The Inspector accordion section is open (plan §3.1). */
+  readonly inspectorOpen: boolean
+  /** The Bitmap accordion section is open (plan §3.1, §4.2). */
+  readonly bitmapOpen: boolean
   /** Inspector integer rows shown as hex rather than decimal (#54, plan §3.3). */
   readonly intHex: boolean
   /** Little- or big-endian, governing every multi-byte numeric decode (#55). */
   readonly byteOrder: ByteOrder
   /** The char column's glyph table (#56). */
   readonly codePage: CodePage
+  /** Bitmap: document bytes drawn per row, each eight pixels (plan §4.2). Int ≥ 1. */
+  readonly bitmapWidth: number
+  /**
+   * Bitmap: the gap added to Width to get Stride — `Stride = Width + offset`,
+   * derived, never stored (plan §4.2). Int ≥ 0; a negative clamps to 0 on load.
+   */
+  readonly bitmapStrideOffset: number
+  /**
+   * Bitmap: rendered height in 1× px (plan §4.2). Int 32–4096, or `null` to
+   * measure the section body once at first open.
+   */
+  readonly bitmapHeight: number | null
+  /** Bitmap: integer upscale factor (plan §4.2). Int 1–3. */
+  readonly bitmapZoom: number
+  /** Bitmap: swap foreground / background bit values — colour only (plan §4.2). */
+  readonly bitmapInvert: boolean
 }
 
 const DEFAULTS: Preferences = {
-  collapsed: false,
-  dock: 'bottom',
+  sidebarCollapsed: false,
+  sidebarWidth: 320,
+  inspectorOpen: true,
+  bitmapOpen: false,
   intHex: false,
   byteOrder: 'le',
   codePage: 'ascii',
-}
-
-function isDock(value: unknown): value is Dock {
-  return value === 'bottom' || value === 'right'
+  bitmapWidth: 4,
+  bitmapStrideOffset: 0,
+  bitmapHeight: null,
+  bitmapZoom: 2,
+  bitmapInvert: false,
 }
 
 function isByteOrder(value: unknown): value is ByteOrder {
@@ -64,12 +92,27 @@ function isCodePage(value: unknown): value is CodePage {
   return (CODE_PAGES as readonly unknown[]).includes(value)
 }
 
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === 'boolean'
+}
+
+/** True for an integer within `[min, max]` inclusive. */
+function isIntInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
+}
+
+/** A stored numeric field: an integer in `[min, max]`, else the field's default. */
+function intInRange(value: unknown, min: number, max: number, fallback: number): number {
+  return isIntInRange(value, min, max) ? value : fallback
+}
+
 /**
  * Read the persisted object once, validating each field against its type /
- * allowed set. Anything invalid *or missing* — and every unknown key — falls to
- * its default; the next `persist()` rewrites the file without the strays.
- * Malformed JSON is all defaults; `localStorage` throwing is session-only
- * defaults plus one `console.warn` (the load runs once per session).
+ * range / allowed set. Anything invalid *or missing* — and every unknown key,
+ * including the phase-1.5 `dock` / `collapsed` — falls to its default; the next
+ * `persist()` rewrites the object without the strays. Malformed JSON is all
+ * defaults; `localStorage` throwing is session-only defaults plus one
+ * `console.warn` (the load runs once per session).
  */
 function loadPreferences(): Preferences {
   let raw: string | null
@@ -97,22 +140,48 @@ function loadPreferences(): Preferences {
 
   const stored = parsed as Record<string, unknown>
   return {
-    collapsed: typeof stored.collapsed === 'boolean' ? stored.collapsed : DEFAULTS.collapsed,
-    dock: isDock(stored.dock) ? stored.dock : DEFAULTS.dock,
-    intHex: typeof stored.intHex === 'boolean' ? stored.intHex : DEFAULTS.intHex,
+    sidebarCollapsed: isBoolean(stored.sidebarCollapsed)
+      ? stored.sidebarCollapsed
+      : DEFAULTS.sidebarCollapsed,
+    sidebarWidth:
+      typeof stored.sidebarWidth === 'number' && Number.isFinite(stored.sidebarWidth)
+        ? stored.sidebarWidth
+        : DEFAULTS.sidebarWidth,
+    inspectorOpen: isBoolean(stored.inspectorOpen) ? stored.inspectorOpen : DEFAULTS.inspectorOpen,
+    bitmapOpen: isBoolean(stored.bitmapOpen) ? stored.bitmapOpen : DEFAULTS.bitmapOpen,
+    intHex: isBoolean(stored.intHex) ? stored.intHex : DEFAULTS.intHex,
     byteOrder: isByteOrder(stored.byteOrder) ? stored.byteOrder : DEFAULTS.byteOrder,
     codePage: isCodePage(stored.codePage) ? stored.codePage : DEFAULTS.codePage,
+    bitmapWidth: intInRange(stored.bitmapWidth, 1, Number.MAX_SAFE_INTEGER, DEFAULTS.bitmapWidth),
+    // The offset is `int ≥ 0` — but a negative *clamps* to 0 rather than falling
+    // to the default (plan §4.2); a non-integer still falls to the default.
+    bitmapStrideOffset:
+      typeof stored.bitmapStrideOffset === 'number' && Number.isInteger(stored.bitmapStrideOffset)
+        ? Math.max(0, stored.bitmapStrideOffset)
+        : DEFAULTS.bitmapStrideOffset,
+    // An integer in the band, else `null` — which doubles as "measure the
+    // section body once at first open" (plan §4.2) and the default.
+    bitmapHeight: isIntInRange(stored.bitmapHeight, 32, 4096) ? stored.bitmapHeight : null,
+    bitmapZoom: intInRange(stored.bitmapZoom, 1, 3, DEFAULTS.bitmapZoom),
+    bitmapInvert: isBoolean(stored.bitmapInvert) ? stored.bitmapInvert : DEFAULTS.bitmapInvert,
   }
 }
 
 export const usePreferencesStore = defineStore('preferences', () => {
   const initial = loadPreferences()
 
-  const collapsed = ref(initial.collapsed)
-  const dock = ref<Dock>(initial.dock)
+  const sidebarCollapsed = ref(initial.sidebarCollapsed)
+  const sidebarWidth = ref(initial.sidebarWidth)
+  const inspectorOpen = ref(initial.inspectorOpen)
+  const bitmapOpen = ref(initial.bitmapOpen)
   const intHex = ref(initial.intHex)
   const byteOrder = ref<ByteOrder>(initial.byteOrder)
   const codePage = ref<CodePage>(initial.codePage)
+  const bitmapWidth = ref(initial.bitmapWidth)
+  const bitmapStrideOffset = ref(initial.bitmapStrideOffset)
+  const bitmapHeight = ref<number | null>(initial.bitmapHeight)
+  const bitmapZoom = ref(initial.bitmapZoom)
+  const bitmapInvert = ref(initial.bitmapInvert)
 
   // One warning per session for a write failure — not one per rejected `persist()`.
   let warnedOnWrite = false
@@ -124,11 +193,18 @@ export const usePreferencesStore = defineStore('preferences', () => {
    */
   function persist(): void {
     const payload: Preferences = {
-      collapsed: collapsed.value,
-      dock: dock.value,
+      sidebarCollapsed: sidebarCollapsed.value,
+      sidebarWidth: sidebarWidth.value,
+      inspectorOpen: inspectorOpen.value,
+      bitmapOpen: bitmapOpen.value,
       intHex: intHex.value,
       byteOrder: byteOrder.value,
       codePage: codePage.value,
+      bitmapWidth: bitmapWidth.value,
+      bitmapStrideOffset: bitmapStrideOffset.value,
+      bitmapHeight: bitmapHeight.value,
+      bitmapZoom: bitmapZoom.value,
+      bitmapInvert: bitmapInvert.value,
     }
     try {
       localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(payload))
@@ -142,13 +218,23 @@ export const usePreferencesStore = defineStore('preferences', () => {
     }
   }
 
-  function setCollapsed(next: boolean): void {
-    collapsed.value = next
+  function setSidebarCollapsed(next: boolean): void {
+    sidebarCollapsed.value = next
     persist()
   }
 
-  function setDock(next: Dock): void {
-    dock.value = next
+  function setSidebarWidth(next: number): void {
+    sidebarWidth.value = next
+    persist()
+  }
+
+  function setInspectorOpen(next: boolean): void {
+    inspectorOpen.value = next
+    persist()
+  }
+
+  function setBitmapOpen(next: boolean): void {
+    bitmapOpen.value = next
     persist()
   }
 
@@ -167,16 +253,55 @@ export const usePreferencesStore = defineStore('preferences', () => {
     persist()
   }
 
+  function setBitmapWidth(next: number): void {
+    bitmapWidth.value = next
+    persist()
+  }
+
+  function setBitmapStrideOffset(next: number): void {
+    bitmapStrideOffset.value = next
+    persist()
+  }
+
+  function setBitmapHeight(next: number | null): void {
+    bitmapHeight.value = next
+    persist()
+  }
+
+  function setBitmapZoom(next: number): void {
+    bitmapZoom.value = next
+    persist()
+  }
+
+  function setBitmapInvert(next: boolean): void {
+    bitmapInvert.value = next
+    persist()
+  }
+
   return {
-    collapsed,
-    dock,
+    sidebarCollapsed,
+    sidebarWidth,
+    inspectorOpen,
+    bitmapOpen,
     intHex,
     byteOrder,
     codePage,
-    setCollapsed,
-    setDock,
+    bitmapWidth,
+    bitmapStrideOffset,
+    bitmapHeight,
+    bitmapZoom,
+    bitmapInvert,
+    setSidebarCollapsed,
+    setSidebarWidth,
+    setInspectorOpen,
+    setBitmapOpen,
     setIntHex,
     setByteOrder,
     setCodePage,
+    setBitmapWidth,
+    setBitmapStrideOffset,
+    setBitmapHeight,
+    setBitmapZoom,
+    setBitmapInvert,
   }
 })

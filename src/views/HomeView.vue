@@ -1,9 +1,12 @@
 <script setup lang="ts">
 // Phase-1 app shell, extended for phase 1.5. The toolbar carries the file-open
 // and bytes-per-row controls; the viewport carries the hex grid; the Inspector
-// Panel (#54) docks to the viewport's bottom or right edge; the status bar reads
+// Panel (#54) sits between the viewport and the status bar; the status bar reads
 // out where the Cursor is (#23); the dead-source banner (#26) surfaces above the
 // viewport when the open document's source latches or repeatedly fails (ADR-0004).
+//
+// Phase 1.75: the Inspector's bottom/right dock is gone (plan-phase1.75.md §3.4,
+// §3.5). The resizable Sidebar / accordion that will house the Panel is #80's.
 import ByteOrderControl from '@/components/ByteOrderControl.vue'
 import BytesPerRowControl from '@/components/BytesPerRowControl.vue'
 import CodePageControl from '@/components/CodePageControl.vue'
@@ -12,17 +15,10 @@ import FileDropZone from '@/components/FileDropZone.vue'
 import HexViewer from '@/components/HexViewer.vue'
 import InspectorPanel from '@/components/InspectorPanel.vue'
 import StatusBar from '@/components/StatusBar.vue'
-import { usePreferencesStore } from '@/stores/preferences'
-
-// Only for the layout: which edge the Inspector docks to (plan §3.1). The Panel
-// itself sits in DOM order between the viewport and the status bar whatever the
-// value, so tab order stays viewport → inspector → status bar (plan §3.7); this
-// attribute only drives whether it renders as a bottom strip or a right column.
-const preferences = usePreferencesStore()
 </script>
 
 <template>
-  <div class="app-shell" :data-inspector-dock="preferences.dock">
+  <div class="app-shell">
     <header class="app-shell__toolbar" data-region="toolbar">
       <FileDropZone />
       <BytesPerRowControl />
@@ -39,7 +35,8 @@ const preferences = usePreferencesStore()
         <HexViewer />
       </main>
       <!-- Visible whenever a document is open, hidden entirely when none is
-           (plan §3.1). Between the viewport and the status bar in DOM order. -->
+           (plan §3.1). Between the viewport and the status bar in DOM order,
+           so tab order stays viewport → inspector → status bar (plan §3.7). -->
       <InspectorPanel />
     </div>
     <!-- Packed and glanceable, never a live region (#23, ADR-0005). -->
@@ -77,18 +74,13 @@ const preferences = usePreferencesStore()
   flex: none;
 }
 
-/* Viewport + Inspector share the space between banner and status bar. Bottom
-   dock stacks them (Inspector below); right dock lays them side by side
-   (Inspector to the right). The Inspector is `flex: none` either way. */
+/* Viewport + Inspector share the space between banner and status bar, stacked
+   with the Inspector below. The Inspector is `flex: none`. */
 .app-shell__content {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.app-shell[data-inspector-dock='right'] .app-shell__content {
-  flex-direction: row;
 }
 
 .app-shell__viewport {
