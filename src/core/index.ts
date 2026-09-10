@@ -9,6 +9,14 @@
 //
 // Phase 1 builds no Web Worker (ADR-0001) — no stub worker module lives here.
 
+export type {
+  BitOrder,
+  PackBitmapParams,
+  PackedBitmap,
+  PackOrder,
+  RowByteSpanParams,
+} from './bitmap'
+export { packBitmap, rowByteSpan } from './bitmap'
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
 export type { CodePage } from './codepages'
