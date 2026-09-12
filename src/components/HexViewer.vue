@@ -565,8 +565,11 @@ function onKeyDown(event: KeyboardEvent): void {
   // while the grid has focus, the same focus-scoped convention as `b` and the
   // Bitmap's `,`/`.`/`L` keys: this handler is bound to the row area itself,
   // so it never fires while the Goto box or the Find box's own input has
-  // focus (they are siblings of the row area, not descendants).
-  if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+  // focus (they are siblings of the row area, not descendants). Shift is
+  // intentionally allowed here (unlike `b`'s guard above): on many non-US
+  // layouts (e.g. Swedish) `/` is only reachable via Shift, so gating on
+  // !event.shiftKey would make the shortcut unreachable on those layouts.
+  if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey) {
     event.preventDefault()
     void findBoxEl.value?.reveal()
     return
