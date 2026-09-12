@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { FIXTURE_PATH } from './support/fixture'
+import { gotoOffset } from './support/goto'
 
 // The copy step writes the real clipboard. Headless Chromium needs the
 // permission granted explicitly; Firefox and WebKit reject the grant call
@@ -26,9 +27,7 @@ test('open → Ctrl+G → arrows → shift-select → copy, keyboard only', asyn
   const cursorOffset = page.locator('[data-field="cursor-offset"]')
 
   // Ctrl+G to an exact offset — the fine navigation path Goto exists to provide.
-  await page.keyboard.press('Control+g')
-  await page.locator('#goto-box-input').fill('0x1000')
-  await page.keyboard.press('Enter')
+  await gotoOffset(page, '0x1000')
   await expect(cursorOffset).toContainText('0x1000')
 
   // Walk the Cursor with the arrows: right, right, down → 0x1002 + one row = 0x1012.
