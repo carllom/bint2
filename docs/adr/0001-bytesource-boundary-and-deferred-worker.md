@@ -102,6 +102,10 @@ The worker gets built when either condition holds, independently:
    uncancellable point reads frozen above. Bolting it onto `ByteSource` would break
    this contract immediately.
 
+   **This trigger has fired.** See
+   [ADR-0013](./0013-derived-work-gets-its-own-worker-not-bytesource.md) for
+   the Worker and worker-crossing interface built in response.
+
 Neither is expected during Phase 1.
 
 ## Considered options
