@@ -105,9 +105,9 @@ _Avoid_: drawer, dock, side panel
 
 **Panel**:
 One titled, independently collapsible region within the Sidebar, holding one
-tool. Two exist — the Inspector and the Bitmap — in a fixed order. No docking,
-no bottom placement, no drag-to-rearrange, no tear-off. Each opens and closes on
-its own, and that open state is persisted.
+tool. Four exist — Inspector, Bitmap, Entropy, Search results — in that fixed
+order. No docking, no bottom placement, no drag-to-rearrange, no tear-off. Each
+opens and closes on its own, and that open state is persisted.
 _Avoid_: pane, dock, widget, accordion section
 
 **Inspector**:
@@ -172,3 +172,10 @@ order produce the same histogram. Distinct from the Entropy map, which the
 same underlying scan also produces, though the two are different renderings of
 different aspects of it.
 _Avoid_: frequency chart, distribution, byte counts
+
+**Search results**:
+The Sidebar panel holding the offsets found by the last Find All, kept after
+the Find box itself closes. Lists each hit's offset and a short preview of the
+matched bytes; stays showing the previous search's hits, marked stale, while a
+new search runs.
+_Avoid_: hit list, matches panel, results view
