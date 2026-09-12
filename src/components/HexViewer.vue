@@ -24,6 +24,8 @@ import {
 import type { Selection, ViewportMetrics } from '@/core'
 import { DomHexRenderer } from '@/rendering'
 import type { HexRowView, SelectionView } from '@/rendering'
+import FindBox from '@/components/FindBox.vue'
+import type { FindBoxHandle } from '@/components/FindBox.vue'
 import GotoBox from '@/components/GotoBox.vue'
 import VirtualScrollbar from '@/components/VirtualScrollbar.vue'
 import ExtentMarker from '@/components/ExtentMarker.vue'
@@ -60,6 +62,7 @@ const bitmap = useBitmapStore()
 const gridEl = useTemplateRef<HTMLElement>('grid')
 const rowAreaEl = useTemplateRef<HTMLElement>('rowArea')
 const probeEl = useTemplateRef<HTMLElement>('probe')
+const findBoxEl = useTemplateRef<FindBoxHandle>('findBox')
 const hasSource = shallowRef(false)
 
 // The byte offset the pointer is over (#30), or `null` when it is over none.
@@ -550,17 +553,22 @@ function onKeyDown(event: KeyboardEvent): void {
   // only while the grid has focus, so it never fires from the Goto box. No
   // conflict with the taken chords (arrows / PageUp·Down / Home·End / Ctrl+G /
   // Ctrl+C / Ctrl+Alt+C / Ctrl+Shift+*).
-  if (
-    event.key === 'b' &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.altKey &&
-    !event.shiftKey
-  ) {
+  if (event.key === 'b' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
     event.preventDefault()
     const next = preferences.byteOrder === 'le' ? 'be' : 'le'
     preferences.setByteOrder(next)
     documentStore.announceByteOrder(next)
+    return
+  }
+
+  // `/` opens Find (#103, docs/plan-phase2.md §3.1) — no modifier, and only
+  // while the grid has focus, the same focus-scoped convention as `b` and the
+  // Bitmap's `,`/`.`/`L` keys: this handler is bound to the row area itself,
+  // so it never fires while the Goto box or the Find box's own input has
+  // focus (they are siblings of the row area, not descendants).
+  if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+    event.preventDefault()
+    void findBoxEl.value?.reveal()
     return
   }
 
@@ -597,11 +605,12 @@ function onKeyDown(event: KeyboardEvent): void {
 }
 
 /**
- * Goto closed (confirm or `Esc`): focus returns to the Viewport so keyboard
- * navigation carries straight on (#24, ADR-0005). The jump itself, when there
- * was one, already went through the store.
+ * Goto or Find closed (confirm/Esc, or Find's own Close button): focus returns
+ * to the Viewport so keyboard navigation carries straight on (#24, #103,
+ * ADR-0005). Whatever the box did to the Cursor or the view, when it did
+ * anything, already went through the store.
  */
-function onGotoClose(): void {
+function onOverlayClose(): void {
   rowAreaEl.value?.focus()
 }
 
@@ -744,8 +753,8 @@ onBeforeUnmount(() => {
            aria-hidden (DomHexRenderer) and never focusable. These two elements
            are the entire accessibility surface for the byte grid itself. -->
       <p id="hex-viewer-usage" class="visually-hidden">
-        Arrow keys move the byte cursor. Ctrl+G jumps to an offset. Press B to switch byte
-        order. Tab leaves this view.
+        Arrow keys move the byte cursor. Ctrl+G jumps to an offset. Press slash to find a hex byte
+        sequence. Press B to switch byte order. Tab leaves this view.
       </p>
       <div
         class="visually-hidden"
@@ -763,7 +772,8 @@ onBeforeUnmount(() => {
       :top-byte-offset="documentStore.topByteOffset"
       @scroll-to-pixel="onScrollToPixel"
     />
-    <GotoBox v-if="hasSource" :metrics="metrics" @close="onGotoClose" />
+    <GotoBox v-if="hasSource" :metrics="metrics" @close="onOverlayClose" />
+    <FindBox v-if="hasSource" ref="findBox" @close="onOverlayClose" />
   </div>
 </template>
 

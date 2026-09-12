@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addressWidthFor,
   describeSelection,
+  parseHexPattern,
   parseOffset,
   toAddress,
   toAsciiChar,
@@ -195,6 +196,33 @@ describe('parseOffset', () => {
     ['nonsense'],
   ])('parseOffset(%j) === null', (text) => {
     expect(parseOffset(text)).toBeNull()
+  })
+})
+
+describe('parseHexPattern (#103)', () => {
+  it('parses uppercase and lowercase byte pairs', () => {
+    expect(parseHexPattern('4D5A')).toEqual(Uint8Array.of(0x4d, 0x5a))
+    expect(parseHexPattern('4d5a')).toEqual(Uint8Array.of(0x4d, 0x5a))
+  })
+
+  it('ignores whitespace between bytes — a copied "toHexString" Selection pastes back in', () => {
+    expect(parseHexPattern('04 05 06 07')).toEqual(Uint8Array.of(4, 5, 6, 7))
+    expect(parseHexPattern('  4D 5A  ')).toEqual(Uint8Array.of(0x4d, 0x5a))
+  })
+
+  it('rejects an odd digit count', () => {
+    expect(parseHexPattern('4D5')).toBeNull()
+    expect(parseHexPattern('4')).toBeNull()
+  })
+
+  it('rejects a non-hex character', () => {
+    expect(parseHexPattern('4G5A')).toBeNull()
+    expect(parseHexPattern('zz')).toBeNull()
+  })
+
+  it('rejects an empty (or all-whitespace) term — nothing to search for', () => {
+    expect(parseHexPattern('')).toBeNull()
+    expect(parseHexPattern('   ')).toBeNull()
   })
 })
 

@@ -46,6 +46,7 @@ export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from
 export {
   addressWidthFor,
   describeSelection,
+  parseHexPattern,
   parseOffset,
   toAddress,
   toAsciiChar,
@@ -59,6 +60,8 @@ export {
 } from './format'
 export type { DecodeOptions, InspectorRow } from './inspector'
 export { decodeInspectorRow, INSPECTOR_READ_LENGTH, INSPECTOR_ROWS } from './inspector'
+export type { MatchStep, SearchDirection } from './searchMatches'
+export { stepMatch } from './searchMatches'
 export type { Selection, SelectionRange } from './selection'
 export { cursorAt, extendTo, isCollapsed, rangeOf } from './selection'
 export type { ThumbGeometry, ViewportMetrics } from './viewport'

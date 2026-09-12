@@ -10,7 +10,7 @@ import {
   toHexString,
   toRawText,
 } from '@/core'
-import type { ByteSource, Selection, ViewportMetrics } from '@/core'
+import type { ByteSource, DerivedWorkClient, Selection, ViewportMetrics } from '@/core'
 
 /**
  * The bytes-per-row presets the reader can reshape the grid to (#19, ADR-0006).
@@ -70,6 +70,12 @@ export const useDocumentStore = defineStore('document', () => {
   // shallowRef: the source wraps a `File` and manages its own state; Vue must
   // not deep-proxy it.
   const source = shallowRef<ByteSource | null>(null)
+  // The document's worker-crossing counterpart to `source` (#103, ADR-0013):
+  // constructed the same way, alongside it, wherever a document opens.
+  // `null` until `open` is first called with one — the FindBox and (later) the
+  // Entropy panel dispatch derived-work jobs to whichever client is current
+  // here, never holding a reference of their own past a document switch.
+  const derivedWorkClient = shallowRef<DerivedWorkClient | null>(null)
   const fileName = ref<string | null>(null)
   const fileSize = ref(0)
 
@@ -122,9 +128,23 @@ export const useDocumentStore = defineStore('document', () => {
     { flush: 'sync' },
   )
 
-  function open(next: ByteSource, name: string): void {
+  /**
+   * `nextDerivedWorkClient` is optional so every existing call site that has
+   * no derived-work job to dispatch (most of the test suite, which drives the
+   * store directly) is unaffected — only `FileDropZone`, which alone has the
+   * raw `File` a client is built from, passes one. One worker per open
+   * document (ADR-0013 §2.3): opening the next terminates whichever client the
+   * previous one held, the same lifecycle `source.close()` already had.
+   */
+  function open(
+    next: ByteSource,
+    name: string,
+    nextDerivedWorkClient: DerivedWorkClient | null = null,
+  ): void {
     source.value?.close()
+    derivedWorkClient.value?.close()
     source.value = next
+    derivedWorkClient.value = nextDerivedWorkClient
     fileName.value = name
     fileSize.value = next.size
     topByteOffset.value = 0
@@ -291,7 +311,10 @@ export const useDocumentStore = defineStore('document', () => {
       }
     }
     if (data === null || data.length < bytes) {
-      actionStatus.value = { ok: false, message: 'Selection could not be read. Nothing was copied.' }
+      actionStatus.value = {
+        ok: false,
+        message: 'Selection could not be read. Nothing was copied.',
+      }
       return
     }
 
@@ -387,6 +410,7 @@ export const useDocumentStore = defineStore('document', () => {
 
   return {
     source,
+    derivedWorkClient,
     fileName,
     fileSize,
     topByteOffset,

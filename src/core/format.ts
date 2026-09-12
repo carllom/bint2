@@ -122,6 +122,25 @@ export function parseOffset(text: string): number | null {
 }
 
 /**
+ * Parse the Find box's hex-mode term (#103, plan §3.2): pairs of hex digits,
+ * with whitespace between bytes ignored so a `toHexString`-formatted Selection
+ * (`"04 05 06 07"`) pastes straight back in. An odd digit count or any
+ * non-hex character is invalid — `null`, with no best-effort partial parse —
+ * and so is an empty term, since there is nothing to search for.
+ */
+export function parseHexPattern(text: string): Uint8Array | null {
+  const cleaned = text.replace(/\s+/g, '')
+  if (cleaned.length === 0 || cleaned.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(cleaned)) {
+    return null
+  }
+  const bytes = new Uint8Array(cleaned.length / 2)
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(cleaned.substring(i * 2, i * 2 + 2), 16)
+  }
+  return bytes
+}
+
+/**
  * A human-readable size for the status bar's document identity — binary units
  * (KiB/MiB/GiB…), since this is a byte-exact tool. Under 1 KiB stays an exact
  * byte count; at or above it, one decimal place. The precise byte count is shown
