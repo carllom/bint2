@@ -4,15 +4,43 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { byteSourceFactoryKey } from '@/byteSourceFactory'
-import type { ByteSource } from '@/core'
-import { ByteSourceError, FileByteSource, toAddress } from '@/core'
+import type {
+  ByteSource,
+  DerivedWorkResponseMessage,
+  DerivedWorkWorkerLike,
+  SearchParams,
+} from '@/core'
+import {
+  ByteSourceError,
+  DerivedWorkClient,
+  FileByteSource,
+  FIND_ALL_MAX_RESULTS,
+  toAddress,
+  toHexString,
+} from '@/core'
+import { derivedWorkClientFactoryKey } from '@/derivedWorkClientFactory'
 import { useDocumentStore } from '@/stores/document'
 import { usePreferencesStore } from '@/stores/preferences'
+import { useSearchResultsStore } from '@/stores/searchResults'
 import HomeView from '@/views/HomeView.vue'
 
 function fileOf(bytes: number[] | Uint8Array, name = 'test.bin'): File {
   return new File([Uint8Array.from(bytes)], name)
 }
+
+/**
+ * `defaultDerivedWorkClientFactory` spins up a real `Worker`, which happy-dom
+ * does not implement (`derivedWorkClientFactory.spec.ts`). None of this
+ * file's cases but the Find suite (#103) below exercise Search, so `mountApp`
+ * always substitutes this inert factory unless a test injects its own.
+ */
+class NoopWorker implements DerivedWorkWorkerLike {
+  onmessage: ((event: MessageEvent) => void) | null = null
+  postMessage(): void {}
+  terminate(): void {}
+}
+const noopDerivedWorkClientFactory = (file: File): DerivedWorkClient =>
+  new DerivedWorkClient(file, { createWorker: () => new NoopWorker() })
 
 /**
  * A source that reports a 2 GB size and generates bytes on demand — byte `i`
@@ -100,12 +128,18 @@ class DeferredSource implements ByteSource {
 let pinia: Pinia
 let wrapper: VueWrapper | null = null
 
-function mountApp(factory?: (file: File) => ByteSource): VueWrapper {
+function mountApp(
+  factory?: (file: File) => ByteSource,
+  derivedWorkFactory?: (file: File) => DerivedWorkClient,
+): VueWrapper {
   wrapper = mount(HomeView, {
     attachTo: document.body,
     global: {
       plugins: [pinia],
-      ...(factory ? { provide: { [byteSourceFactoryKey as symbol]: factory } } : {}),
+      provide: {
+        ...(factory ? { [byteSourceFactoryKey as symbol]: factory } : {}),
+        [derivedWorkClientFactoryKey as symbol]: derivedWorkFactory ?? noopDerivedWorkClientFactory,
+      },
     },
   })
   return wrapper
@@ -2073,5 +2107,997 @@ describe('the b hotkey flips the view-wide byte order (#55)', () => {
     const app = mountApp()
     await openSynthetic(app, new SyntheticByteSource())
     expect(app.find('#hex-viewer-usage').text()).toMatch(/press b to switch byte order/i)
+  })
+})
+
+// --- Find: search the whole file for a hex byte sequence (#103) ------------
+
+/**
+ * A hand-driven fake of the worker seam (mirrors `DerivedWorkClient.spec.ts`),
+ * with `sent`/`emit` so a test can dispatch a job through the real
+ * `DerivedWorkClient` and drive its response without a real `Worker`.
+ */
+class SearchFakeWorker implements DerivedWorkWorkerLike {
+  readonly sent: unknown[] = []
+  onmessage: ((event: MessageEvent) => void) | null = null
+  terminateCalls = 0
+  postMessage(message: unknown): void {
+    this.sent.push(message)
+  }
+  terminate(): void {
+    this.terminateCalls++
+  }
+  emit(message: DerivedWorkResponseMessage): void {
+    this.onmessage?.({ data: message } as MessageEvent)
+  }
+}
+
+interface SentRequest {
+  type: 'request'
+  reqId: string
+  kind: 'search'
+  params: SearchParams
+}
+interface SentCancel {
+  type: 'cancel'
+  reqId: string
+}
+
+function sentRequests(worker: SearchFakeWorker): SentRequest[] {
+  return worker.sent.filter(
+    (m): m is SentRequest =>
+      typeof m === 'object' && m !== null && (m as SentRequest).type === 'request',
+  )
+}
+
+function sentCancels(worker: SearchFakeWorker): SentCancel[] {
+  return worker.sent.filter(
+    (m): m is SentCancel =>
+      typeof m === 'object' && m !== null && (m as SentCancel).type === 'cancel',
+  )
+}
+
+/** Opens the app with a controllable derived-work worker per opened document. */
+function mountFindApp(): { app: VueWrapper; workers: SearchFakeWorker[] } {
+  const workers: SearchFakeWorker[] = []
+  const factory = (file: File): DerivedWorkClient => {
+    const worker = new SearchFakeWorker()
+    workers.push(worker)
+    return new DerivedWorkClient(file, { createWorker: () => worker })
+  }
+  const app = mountApp(undefined, factory)
+  return { app, workers }
+}
+
+async function openForSearch(app: VueWrapper, bytes: number[], name = 'search.bin'): Promise<void> {
+  await pickFile(app, fileOf(bytes, name))
+}
+
+/** `/` on the grid — the only route this component opens through (#103). */
+async function openFind(app: VueWrapper): Promise<void> {
+  await app.find('.hex-viewer__row-area').trigger('keydown', { key: '/' })
+  await flushPromises()
+}
+
+async function typeTerm(app: VueWrapper, hex: string): Promise<void> {
+  await app.find('#find-box-input').setValue(hex)
+}
+
+async function pressEnter(app: VueWrapper, shiftKey = false): Promise<void> {
+  await app.find('#find-box-input').trigger('keydown', { key: 'Enter', shiftKey })
+  await flushPromises()
+}
+
+function resolveSearch(
+  worker: SearchFakeWorker,
+  reqId: string,
+  matches: number[],
+  partial = false,
+): void {
+  worker.emit({
+    reqId,
+    kind: 'result',
+    ok: true,
+    result: { matches: Float64Array.from(matches), partial },
+  })
+}
+
+async function clickFindAll(app: VueWrapper): Promise<void> {
+  await app.find('.find-box__find-all').trigger('click')
+  await flushPromises()
+}
+
+async function setMode(app: VueWrapper, mode: 'hex' | 'text'): Promise<void> {
+  await app.find(mode === 'hex' ? '.find-box__mode-hex' : '.find-box__mode-text').trigger('click')
+}
+
+async function setScope(app: VueWrapper, scope: 'file' | 'selection'): Promise<void> {
+  await app
+    .find(scope === 'file' ? '.find-box__scope-file' : '.find-box__scope-selection')
+    .trigger('click')
+}
+
+async function setCaseSensitive(app: VueWrapper, value: boolean): Promise<void> {
+  await app.find('#find-box-case-sensitive').setValue(value)
+}
+
+describe('Find: search the whole file for a hex byte sequence (#103)', () => {
+  it("'/' opens the box only while the grid has focus, closes on Esc, and returns focus to the grid", async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+
+    expect(app.find('.find-box').exists()).toBe(false)
+    await openFind(app)
+    expect(app.find('.find-box').exists()).toBe(true)
+    expect(document.activeElement).toBe(app.find('#find-box-input').element)
+
+    await app.find('.find-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(app.find('.find-box').exists()).toBe(false)
+    expect(document.activeElement).toBe(app.find('.hex-viewer__row-area').element)
+  })
+
+  it('does not open while another input (the Goto box) has focus', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+
+    await pressCtrlG()
+    await app.find('#goto-box-input').trigger('keydown', { key: '/' })
+    await flushPromises()
+
+    expect(app.find('.find-box').exists()).toBe(false)
+  })
+
+  it('typing an invalid hex string disables Find with an inline error; a valid one enables it', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+
+    await typeTerm(app, '4G') // non-hex character
+    expect((app.find('.find-box__next').element as HTMLButtonElement).disabled).toBe(true)
+    expect(app.find('#find-box-input').attributes('aria-invalid')).toBe('true')
+    expect(app.find('#find-box-status').text()).toMatch(/valid hex/i)
+
+    await typeTerm(app, '4D5') // odd digit count
+    expect((app.find('.find-box__next').element as HTMLButtonElement).disabled).toBe(true)
+
+    await typeTerm(app, '4D5A')
+    expect((app.find('.find-box__next').element as HTMLButtonElement).disabled).toBe(false)
+    expect(app.find('#find-box-input').attributes('aria-invalid')).toBeUndefined()
+  })
+
+  it('Enter dispatches a search job to the worker and moves the Cursor to the resulting match', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A') // byte 0x2A, offset 42 in this fixture
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    const reqs = sentRequests(worker)
+    expect(reqs).toHaveLength(1)
+    expect(reqs[0]!.params.pattern).toEqual(Uint8Array.of(0x2a))
+    expect(app.find('.find-box__cancel').exists()).toBe(true) // spinner + Cancel while in flight
+
+    resolveSearch(worker, reqs[0]!.reqId, [42])
+    await flushPromises()
+
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+    expect(app.find('.find-box__cancel').exists()).toBe(false) // job finished
+  })
+
+  it('Shift+Enter finds the previous match, from the Cursor backwards', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    store.setCursor(50)
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app, true)
+
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+    resolveSearch(worker, reqId, [10, 42])
+    await flushPromises()
+
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+  })
+
+  it('a second Next/Previous for the same term reuses the cached result — no second job', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10, 42])
+    await flushPromises()
+    expect(store.selection).toEqual({ anchor: 10, focus: 10 })
+
+    await pressEnter(app) // Next again, same term
+    expect(sentRequests(worker)).toHaveLength(1) // no second dispatch
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+  })
+
+  it('wraps silently at EOF/BOF, showing the shared status message', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    store.setCursor(42)
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [42]) // the only match is under the Cursor
+    await flushPromises()
+
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+    expect(app.find('#find-box-status').text()).toMatch(/wrapped to start of file/i)
+  })
+
+  it('shows "No match found" when the scan comes back empty, never alongside the wrap message', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+    await typeTerm(app, 'FF')
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [])
+    await flushPromises()
+
+    const status = app.find('#find-box-status').text()
+    expect(status).toMatch(/no match found/i)
+    expect(status).not.toMatch(/wrapped/i)
+  })
+
+  it('a same-term Next while a job is in flight is a no-op — no second job dispatched', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    await pressEnter(app) // same term, still pending
+
+    expect(sentRequests(workers[0]!)).toHaveLength(1)
+    expect(app.find('.find-box__cancel').exists()).toBe(true) // still spinning
+  })
+
+  it('a different term cancels the running job and starts a new one', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const firstReqId = sentRequests(worker)[0]!.reqId
+
+    await typeTerm(app, '01') // a different term while the first is still in flight
+    await pressEnter(app)
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(firstReqId)
+    const reqs = sentRequests(worker)
+    expect(reqs).toHaveLength(2)
+    expect(reqs[1]!.params.pattern).toEqual(Uint8Array.of(0x01))
+
+    // The superseded job's late result must not move the Cursor.
+    resolveSearch(worker, firstReqId, [42])
+    await flushPromises()
+    expect(store.selection).toBeNull()
+
+    resolveSearch(worker, reqs[1]!.reqId, [1])
+    await flushPromises()
+    expect(store.selection).toEqual({ anchor: 1, focus: 1 })
+  })
+
+  it('Cancel actually stops the job — the spinner clears and the Cursor does not move', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    await app.find('.find-box__cancel').trigger('click')
+    await flushPromises()
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+
+    // A late result for the cancelled job must not resurrect it.
+    resolveSearch(worker, reqId, [42])
+    await flushPromises()
+    expect(store.selection).toBeNull()
+  })
+
+  it('the term survives closing and reopening the box within the same session', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+    await typeTerm(app, '4D5A')
+
+    await app.find('.find-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('4D5A')
+  })
+
+  it('a new document opening terminates the previous document’s worker', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4], 'a.bin')
+    await openForSearch(app, [5, 6, 7, 8], 'b.bin')
+
+    expect(workers).toHaveLength(2)
+    expect(workers[0]!.terminateCalls).toBe(1)
+  })
+
+  it('the term does not survive an unrelated document being opened next', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4], 'a.bin')
+    await openFind(app)
+    await typeTerm(app, '4D5A')
+
+    await openForSearch(app, [5, 6, 7, 8], 'b.bin') // a genuinely different file, not a reopen
+
+    await openFind(app)
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('')
+  })
+
+  it('editing the term mid-scan cancels the stale job — its late result must not move the Cursor', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app) // dispatches, does not resolve yet
+    const worker = workers[0]!
+    const firstReqId = sentRequests(worker)[0]!.reqId
+
+    // The reader retypes the term but never presses Enter/Shift+Enter again.
+    await typeTerm(app, 'FF')
+    await flushPromises()
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(firstReqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false) // no job in flight any more
+
+    // The abandoned "2A" job's result arrives late regardless — it must not
+    // move the Cursor for a term the box no longer shows.
+    resolveSearch(worker, firstReqId, [42])
+    await flushPromises()
+    expect(store.selection).toBeNull()
+  })
+})
+
+// --- Find: text mode (#105) -------------------------------------------------
+
+describe('Find: text mode', () => {
+  it('defaults to hex mode with the case-sensitivity toggle hidden, not disabled', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+
+    expect(app.find('.find-box__mode-hex').attributes('aria-pressed')).toBe('true')
+    expect(app.find('#find-box-case-sensitive').exists()).toBe(false)
+  })
+
+  it('switching to text mode reveals the case-sensitivity toggle, default unchecked (case-insensitive)', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+
+    await setMode(app, 'text')
+
+    expect(app.find('.find-box__mode-text').attributes('aria-pressed')).toBe('true')
+    const checkbox = app.find('#find-box-case-sensitive')
+    expect(checkbox.exists()).toBe(true)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('a term containing an unreachable glyph (".") disables Find with an inline error', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+    await setMode(app, 'text')
+
+    await typeTerm(app, 'a.b') // '.' never resolves — shared with too many placeholder bytes
+    expect((app.find('.find-box__next').element as HTMLButtonElement).disabled).toBe(true)
+    expect(app.find('#find-box-input').attributes('aria-invalid')).toBe('true')
+
+    await typeTerm(app, 'MZ')
+    expect((app.find('.find-box__next').element as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('Enter dispatches the reverse-table byte pattern, case-insensitive by default', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'MZ')
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    const reqs = sentRequests(worker)
+    expect(reqs).toHaveLength(1)
+    expect(reqs[0]!.params.pattern).toEqual(Uint8Array.of(0x4d, 0x5a))
+    expect(reqs[0]!.params.caseInsensitive).toBe(true)
+  })
+
+  it('the case-sensitive toggle turns the case-fold flag off', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await setCaseSensitive(app, true)
+    await typeTerm(app, 'MZ')
+    await pressEnter(app)
+
+    expect(sentRequests(workers[0]!)[0]!.params.caseInsensitive).toBe(false)
+  })
+
+  it('actually matches case-insensitively end to end', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    // "hello" lowercase in the file; the reader types it uppercase.
+    await openForSearch(app, [0x68, 0x65, 0x6c, 0x6c, 0x6f])
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'HELLO')
+    await pressEnter(app)
+
+    resolveSearch(workers[0]!, sentRequests(workers[0]!)[0]!.reqId, [0])
+    await flushPromises()
+
+    expect(store.selection).toEqual({ anchor: 0, focus: 0 })
+  })
+})
+
+// --- Find: pre-population from the Selection (#105) -------------------------
+
+describe('Find: pre-population from the Selection', () => {
+  it('opening with a non-collapsed Selection pre-fills the term from its bytes, hex mode', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [0x4d, 0x5a, 0x90, 0x00])
+    store.setCursor(0)
+    store.extendSelectionTo(1) // bytes [0x4D, 0x5A]
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('4D 5A')
+  })
+
+  it('pre-fills decoded via the current Code page when the box is reopened in text mode', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [0x48, 0x49, 0x21, 0x00]) // "HI!"
+    await openFind(app)
+    await setMode(app, 'text')
+    await app.find('.find-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    store.setCursor(0)
+    store.extendSelectionTo(2) // bytes 0x48, 0x49, 0x21 -> "HI!"
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('HI!')
+  })
+
+  it('caps pre-population at 16 bytes, silently truncated', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    const bytes = Array.from({ length: 20 }, (_u, i) => i)
+    await openForSearch(app, bytes)
+    store.setCursor(0)
+    store.extendSelectionTo(19) // 20 bytes selected
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe(
+      toHexString(Uint8Array.from(bytes.slice(0, 16))),
+    )
+  })
+
+  it('leaves the last-used term untouched when there is no non-collapsed Selection', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+    await typeTerm(app, '4D5A')
+    await app.find('.find-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    store.setCursor(2) // collapsed — the Cursor, not a Selection
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('4D5A')
+  })
+})
+
+// --- Find: Selection scoping (#105) ------------------------------------------
+
+describe('Find: Selection scoping', () => {
+  it('the Selection scope toggle is disabled with no non-collapsed Selection, enabled once one exists', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+
+    expect((app.find('.find-box__scope-selection').element as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+
+    store.setCursor(0)
+    store.extendSelectionTo(2)
+    await flushPromises()
+
+    expect((app.find('.find-box__scope-selection').element as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+  })
+
+  it('captures the Selection range once at toggle time and reuses it for every subsequent Next, even after the Cursor moves and collapses the Selection', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    const bytes = Array.from({ length: 64 }, (_u, i) => i)
+    bytes[10] = 0x2a
+    bytes[42] = 0x2a
+    bytes[60] = 0x2a // outside the Selection captured below
+    await openForSearch(app, bytes)
+    store.setCursor(5)
+    store.extendSelectionTo(50) // [5, 51) — contains the matches at 10 and 42, not 60
+    await openFind(app)
+    await setScope(app, 'selection')
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10, 42, 60])
+    await flushPromises()
+    // from = the live focus (50) at match time; nothing in-range is past it, so it wraps to the first.
+    expect(store.selection).toEqual({ anchor: 10, focus: 10 })
+
+    await pressEnter(app) // cached — no second job
+    expect(sentRequests(worker)).toHaveLength(1)
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+
+    // The Selection has been collapsing onto each match (setCursor's own
+    // behaviour) and is now moved further still, outside the captured range —
+    // the next Next must still only ever consider the range captured at toggle time.
+    store.setCursor(55)
+    await pressEnter(app)
+    expect(store.selection).toEqual({ anchor: 10, focus: 10 }) // wraps — nothing captured is past 55
+  })
+
+  it('re-toggling scope off then on again forces a fresh capture', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    const bytes = Array.from({ length: 64 }, (_u, i) => i)
+    bytes[10] = 0x2a
+    bytes[42] = 0x2a
+    bytes[60] = 0x2a
+    await openForSearch(app, bytes)
+    store.setCursor(5)
+    store.extendSelectionTo(50) // [5, 51)
+    await openFind(app)
+    await setScope(app, 'selection')
+
+    await setScope(app, 'file')
+    store.setCursor(40)
+    store.extendSelectionTo(63) // [40, 64) — now contains 42 and 60, not 10
+    await setScope(app, 'selection')
+
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    resolveSearch(workers[0]!, sentRequests(workers[0]!)[0]!.reqId, [10, 42, 60])
+    await flushPromises()
+
+    // from = the live focus (63); wraps to the first byte in the *new* capture.
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+  })
+
+  it('changing scope while a job is running cancels it', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    store.setCursor(0)
+    store.extendSelectionTo(30)
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    await setScope(app, 'selection')
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+
+  it('changing mode while a job is running cancels it', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    await setMode(app, 'text')
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+
+  it('changing case-sensitivity while a job is running cancels it', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    await setCaseSensitive(app, true)
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+
+  it('changing the Code page in text mode while a job is running cancels it — the pattern is resolved through it', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    usePreferencesStore(pinia).setCodePage('cp437')
+    await flushPromises()
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+})
+
+// --- Find All: the 500-result cap and the Search results panel (#106) ------
+
+describe('Find All (#106, ADR-0014)', () => {
+  it('dispatches a capped search job and populates the Search results store once it completes', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+
+    const worker = workers[0]!
+    const reqs = sentRequests(worker)
+    expect(reqs).toHaveLength(1)
+    expect(reqs[0]!.params.maxResults).toBe(FIND_ALL_MAX_RESULTS)
+    expect(app.find('.find-box__cancel').exists()).toBe(true) // shares the one pending/Cancel UI
+
+    const store = useSearchResultsStore(pinia)
+    expect(store.results).toBeNull() // not populated progressively
+
+    resolveSearch(worker, reqs[0]!.reqId, [10, 42])
+    await flushPromises()
+
+    expect(store.results).toEqual({
+      hits: Float64Array.of(10, 42),
+      matchLength: 1,
+      partial: false,
+      mode: 'hex',
+    })
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+
+  it('marks the result partial when the worker reports the cap was hit', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10, 42], true)
+    await flushPromises()
+
+    expect(useSearchResultsStore(pinia).results?.partial).toBe(true)
+  })
+
+  it('captures the Find box’s current mode into the result, independent of the box changing mode afterward', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'A')
+    await clickFindAll(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    resolveSearch(worker, reqId, [5])
+    await flushPromises()
+
+    expect(useSearchResultsStore(pinia).results?.mode).toBe('text')
+  })
+
+  it('always scans the whole file, ignoring the Selection scope toggle', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    store.setCursor(0)
+    store.extendSelectionTo(10)
+    await openFind(app)
+    await setScope(app, 'selection')
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+
+    const worker = workers[0]!
+    // No range of any kind travels with a search job — the protocol has none
+    // (ADR-0013 §2.4) — so there is nothing scope-related to assert on the
+    // request beyond its absence; the real proof is the result landing
+    // unfiltered even though the match (offset 42) sits outside [0, 11).
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [42])
+    await flushPromises()
+
+    expect(useSearchResultsStore(pinia).results?.hits).toEqual(Float64Array.of(42))
+  })
+
+  it('a same-dispatch Find All while one is in flight is a no-op', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    await clickFindAll(app) // same pattern, still pending
+
+    expect(sentRequests(workers[0]!)).toHaveLength(1)
+  })
+
+  it('a different term while Find All is running supersedes it — the stale result never lands', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    const worker = workers[0]!
+    const firstReqId = sentRequests(worker)[0]!.reqId
+
+    await typeTerm(app, '01')
+    await clickFindAll(app)
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(firstReqId)
+    resolveSearch(worker, firstReqId, [42])
+    await flushPromises()
+    expect(useSearchResultsStore(pinia).results).toBeNull()
+
+    resolveSearch(worker, sentRequests(worker)[1]!.reqId, [1])
+    await flushPromises()
+    expect(useSearchResultsStore(pinia).results?.hits).toEqual(Float64Array.of(1))
+  })
+
+  it('pressing Next while a Find All is running supersedes it (one job at a time, ADR-0013 §2.4)', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    const worker = workers[0]!
+    const findAllReqId = sentRequests(worker)[0]!.reqId
+
+    await pressEnter(app) // Next — a different dispatch (uncapped), supersedes Find All
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(findAllReqId)
+    const reqs = sentRequests(worker)
+    expect(reqs).toHaveLength(2)
+    expect(reqs[1]!.params.maxResults).toBeUndefined()
+
+    // The superseded Find All's late result must not populate the panel.
+    resolveSearch(worker, findAllReqId, [10], true)
+    await flushPromises()
+    expect(useSearchResultsStore(pinia).results).toBeNull()
+
+    resolveSearch(worker, reqs[1]!.reqId, [42])
+    await flushPromises()
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+  })
+
+  it('pressing Next while a *second* Find All is running un-stales the panel immediately, not just once Next itself resolves', async () => {
+    // Regression: the superseded Find All's own `.then`/`.catch` cannot be
+    // relied on to clear `searchResultsStore.pending` — by the time its
+    // rejection settles, `job` already points at the dispatch that
+    // superseded it, so that Find All's own stale-callback guard skips its
+    // cleanup. Clearing it must happen synchronously, at supersession time.
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10]) // a completed result to go stale
+    await flushPromises()
+    const store = useSearchResultsStore(pinia)
+
+    await typeTerm(app, '01')
+    await clickFindAll(app) // a second Find All — marks the panel stale
+    expect(store.pending).toBe(true)
+
+    await pressEnter(app) // Next supersedes the still-running second Find All
+
+    expect(store.pending).toBe(false) // un-stale immediately — not stuck forever
+    expect(store.results?.hits).toEqual(Float64Array.of(10)) // unchanged
+  })
+
+  it('marks previous results stale while a new Find All runs, un-staling once it completes', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10])
+    await flushPromises()
+    const store = useSearchResultsStore(pinia)
+    expect(store.pending).toBe(false)
+
+    await typeTerm(app, '01')
+    await clickFindAll(app)
+    expect(store.pending).toBe(true)
+    expect(store.results?.hits).toEqual(Float64Array.of(10)) // still showing, marked stale
+
+    resolveSearch(worker, sentRequests(worker)[1]!.reqId, [1])
+    await flushPromises()
+    expect(store.pending).toBe(false)
+    expect(store.results?.hits).toEqual(Float64Array.of(1))
+  })
+
+  it('un-stales without discarding the previous results when the new Find All is cancelled instead', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10])
+    await flushPromises()
+
+    await typeTerm(app, '01')
+    await clickFindAll(app)
+    const store = useSearchResultsStore(pinia)
+    expect(store.pending).toBe(true)
+
+    await app.find('.find-box__cancel').trigger('click')
+    await flushPromises()
+
+    expect(store.pending).toBe(false)
+    expect(store.results?.hits).toEqual(Float64Array.of(10)) // unchanged
+  })
+
+  it('closing the Find box (Esc) cancels a running Find All but leaves its previous results in place', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10])
+    await flushPromises()
+
+    await typeTerm(app, '01')
+    await clickFindAll(app)
+    const reqId = sentRequests(worker)[1]!.reqId
+
+    await app.find('.find-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    const store = useSearchResultsStore(pinia)
+    expect(store.pending).toBe(false)
+    expect(store.results?.hits).toEqual(Float64Array.of(10))
+  })
+
+  it('a new document opening clears the Search results store entirely', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+      'a.bin',
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await clickFindAll(app)
+    resolveSearch(workers[0]!, sentRequests(workers[0]!)[0]!.reqId, [10])
+    await flushPromises()
+    expect(useSearchResultsStore(pinia).results).not.toBeNull()
+
+    await openForSearch(app, [1, 2, 3, 4], 'b.bin')
+
+    expect(useSearchResultsStore(pinia).results).toBeNull()
+    expect(useSearchResultsStore(pinia).pending).toBe(false)
   })
 })

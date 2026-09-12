@@ -105,9 +105,9 @@ _Avoid_: drawer, dock, side panel
 
 **Panel**:
 One titled, independently collapsible region within the Sidebar, holding one
-tool. Two exist — the Inspector and the Bitmap — in a fixed order. No docking,
-no bottom placement, no drag-to-rearrange, no tear-off. Each opens and closes on
-its own, and that open state is persisted.
+tool. Four exist — Inspector, Bitmap, Entropy, Search results — in that fixed
+order. No docking, no bottom placement, no drag-to-rearrange, no tear-off. Each
+opens and closes on its own, and that open state is persisted.
 _Avoid_: pane, dock, widget, accordion section
 
 **Inspector**:
@@ -154,3 +154,28 @@ where an off-screen Bitmap is pointed. Transient view chrome that carries no
 meaning of its own and disappears once the Origin follows the Cursor again — not
 an Annotation.
 _Avoid_: coverage, footprint, reveal, region
+
+**Entropy map**:
+A block-based Shannon-entropy heatmap over a contiguous run of the document's
+bytes — the whole file or the current Selection. Each block's entropy is
+painted as one strip segment on a thermal color scale; the Panel's block size
+is configurable, the same role Width plays for the Bitmap. A rendering of
+computed values, not the bytes themselves — distinct from the Bitmap, which
+paints the bits directly.
+_Avoid_: heatmap, entropy view, compression map
+
+**Byte histogram**:
+A normalized 256-value byte-frequency distribution over the same kind of range
+as the Entropy map — the count of each byte value divided by the range's total
+length. Has no positional axis: two ranges with the same bytes in different
+order produce the same histogram. Distinct from the Entropy map, which the
+same underlying scan also produces, though the two are different renderings of
+different aspects of it.
+_Avoid_: frequency chart, distribution, byte counts
+
+**Search results**:
+The Sidebar panel holding the offsets found by the last Find All, kept after
+the Find box itself closes. Lists each hit's offset and a short preview of the
+matched bytes; stays showing the previous search's hits, marked stale, while a
+new search runs.
+_Avoid_: hit list, matches panel, results view

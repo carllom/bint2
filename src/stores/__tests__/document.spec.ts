@@ -1,7 +1,26 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ByteSource } from '@/core'
+import { DerivedWorkClient } from '@/core'
+import type { DerivedWorkWorkerLike } from '@/core'
 import { BYTES_PER_ROW_PRESETS, COPY_BYTE_CAP, useDocumentStore } from '../document'
+
+/** A hand-driven fake of the worker seam (mirrors `DerivedWorkClient.spec.ts`) —
+ *  enough to construct a real `DerivedWorkClient` without a real `Worker`. */
+class FakeWorker implements DerivedWorkWorkerLike {
+  onmessage: ((event: MessageEvent) => void) | null = null
+  terminateCalls = 0
+  postMessage(): void {}
+  terminate(): void {
+    this.terminateCalls++
+  }
+}
+
+function derivedWorkClient(): { client: DerivedWorkClient; worker: FakeWorker } {
+  const worker = new FakeWorker()
+  const client = new DerivedWorkClient(new File([], 'x.bin'), { createWorker: () => worker })
+  return { client, worker }
+}
 
 /** A bytes-only stub — the store never reads, it only tracks identity and size. */
 function sourceOfSize(size: number): ByteSource {
@@ -584,5 +603,47 @@ describe('requestReveal — the Bitmap click-to-cursor reveal signal (plan §4.9
 
     store.open(sourceOfSize(2048), 'b.bin')
     expect(store.revealRequest).toBeNull()
+  })
+})
+
+describe('derivedWorkClient — the worker-crossing lifecycle (#103, ADR-0013)', () => {
+  it('is null until a document opens with one', () => {
+    expect(useDocumentStore().derivedWorkClient).toBeNull()
+  })
+
+  it('open with no third argument leaves it null — every existing call site is unaffected', () => {
+    const store = useDocumentStore()
+    store.open(sourceOfSize(64), 'a.bin')
+    expect(store.derivedWorkClient).toBeNull()
+  })
+
+  it('holds the client a caller passes to open', () => {
+    const store = useDocumentStore()
+    const { client } = derivedWorkClient()
+    store.open(sourceOfSize(64), 'a.bin', client)
+    expect(store.derivedWorkClient).toBe(client)
+  })
+
+  it('terminates the previous document’s client when the next document opens — one worker per open document', () => {
+    const store = useDocumentStore()
+    const first = derivedWorkClient()
+    const second = derivedWorkClient()
+    store.open(sourceOfSize(64), 'a.bin', first.client)
+
+    store.open(sourceOfSize(64), 'b.bin', second.client)
+
+    expect(first.worker.terminateCalls).toBe(1)
+    expect(store.derivedWorkClient).toBe(second.client)
+  })
+
+  it('opening a plain document (no client) still terminates the previous one', () => {
+    const store = useDocumentStore()
+    const first = derivedWorkClient()
+    store.open(sourceOfSize(64), 'a.bin', first.client)
+
+    store.open(sourceOfSize(64), 'b.bin')
+
+    expect(first.worker.terminateCalls).toBe(1)
+    expect(store.derivedWorkClient).toBeNull()
   })
 })

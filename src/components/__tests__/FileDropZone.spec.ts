@@ -4,10 +4,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { byteSourceFactoryKey } from '@/byteSourceFactory'
-import type { ByteSource } from '@/core'
-import { FileByteSource } from '@/core'
+import type { ByteSource, DerivedWorkWorkerLike } from '@/core'
+import { DerivedWorkClient, FileByteSource } from '@/core'
+import { derivedWorkClientFactoryKey } from '@/derivedWorkClientFactory'
 import { useDocumentStore } from '@/stores/document'
 import HomeView from '@/views/HomeView.vue'
+
+/**
+ * `defaultDerivedWorkClientFactory` spins up a real `Worker`, which the
+ * happy-dom test environment does not implement (`derivedWorkClientFactory.spec.ts`).
+ * None of this file's cases exercise Search, so `mountApp` always substitutes
+ * this inert factory unless a test injects its own — mirroring how the real
+ * `byteSourceFactory` default is safe to leave in place here, but the real
+ * derived-work one is not.
+ */
+class NoopWorker implements DerivedWorkWorkerLike {
+  onmessage: ((event: MessageEvent) => void) | null = null
+  postMessage(): void {}
+  terminate(): void {}
+}
+const noopDerivedWorkClientFactory = (file: File): DerivedWorkClient =>
+  new DerivedWorkClient(file, { createWorker: () => new NoopWorker() })
 
 // The file-open reject policy (#21), exercised at the app-shell seam: HomeView
 // mounted whole with the real file-backed source, driven through the hidden
@@ -48,7 +65,10 @@ function mountApp(factory?: (file: File) => ByteSource): VueWrapper {
     attachTo: document.body,
     global: {
       plugins: [pinia],
-      ...(factory ? { provide: { [byteSourceFactoryKey as symbol]: factory } } : {}),
+      provide: {
+        ...(factory ? { [byteSourceFactoryKey as symbol]: factory } : {}),
+        [derivedWorkClientFactoryKey as symbol]: noopDerivedWorkClientFactory,
+      },
     },
   })
   return wrapper

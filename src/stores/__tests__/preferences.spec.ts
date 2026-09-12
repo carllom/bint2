@@ -33,6 +33,8 @@ function snapshot(store: ReturnType<typeof usePreferencesStore>): Preferences {
     sidebarWidth: store.sidebarWidth,
     inspectorOpen: store.inspectorOpen,
     bitmapOpen: store.bitmapOpen,
+    entropyOpen: store.entropyOpen,
+    searchResultsOpen: store.searchResultsOpen,
     intHex: store.intHex,
     byteOrder: store.byteOrder,
     codePage: store.codePage,
@@ -41,6 +43,7 @@ function snapshot(store: ReturnType<typeof usePreferencesStore>): Preferences {
     bitmapHeight: store.bitmapHeight,
     bitmapZoom: store.bitmapZoom,
     bitmapInvert: store.bitmapInvert,
+    entropyBlockSize: store.entropyBlockSize,
   }
 }
 
@@ -49,6 +52,8 @@ const DEFAULTS: Preferences = {
   sidebarWidth: 320,
   inspectorOpen: true,
   bitmapOpen: false,
+  entropyOpen: false,
+  searchResultsOpen: false,
   intHex: false,
   byteOrder: 'le',
   codePage: 'ascii',
@@ -57,6 +62,7 @@ const DEFAULTS: Preferences = {
   bitmapHeight: null,
   bitmapZoom: 2,
   bitmapInvert: false,
+  entropyBlockSize: 256,
 }
 
 beforeEach(() => {
@@ -97,6 +103,8 @@ describe('preferences store — setters persist the whole object as JSON', () =>
     store.setSidebarWidth(440)
     store.setInspectorOpen(false)
     store.setBitmapOpen(true)
+    store.setEntropyOpen(true)
+    store.setSearchResultsOpen(true)
     store.setIntHex(true)
     store.setByteOrder('be')
     store.setCodePage('cp437')
@@ -105,12 +113,15 @@ describe('preferences store — setters persist the whole object as JSON', () =>
     store.setBitmapHeight(128)
     store.setBitmapZoom(3)
     store.setBitmapInvert(true)
+    store.setEntropyBlockSize(512)
 
     expect(readBack()).toEqual({
       sidebarCollapsed: true,
       sidebarWidth: 440,
       inspectorOpen: false,
       bitmapOpen: true,
+      entropyOpen: true,
+      searchResultsOpen: true,
       intHex: true,
       byteOrder: 'be',
       codePage: 'cp437',
@@ -119,6 +130,7 @@ describe('preferences store — setters persist the whole object as JSON', () =>
       bitmapHeight: 128,
       bitmapZoom: 3,
       bitmapInvert: true,
+      entropyBlockSize: 512,
     })
   })
 
@@ -167,6 +179,8 @@ describe('preferences store — per-field validation on load (plan §2)', () => 
       sidebarWidth: '320',
       inspectorOpen: 1,
       bitmapOpen: null,
+      entropyOpen: 'no',
+      searchResultsOpen: 'no',
       intHex: 'no',
       byteOrder: ['le'],
       codePage: 3,
@@ -175,6 +189,7 @@ describe('preferences store — per-field validation on load (plan §2)', () => 
       bitmapHeight: 'tall',
       bitmapZoom: 'big',
       bitmapInvert: 'false',
+      entropyBlockSize: '256',
     })
     expect(snapshot(store)).toEqual(DEFAULTS)
   })
@@ -261,6 +276,19 @@ describe('preferences store — per-field validation on load (plan §2)', () => 
       expect(withStored({ bitmapZoom: 0 }).bitmapZoom).toBe(2)
       expect(withStored({ bitmapZoom: 4 }).bitmapZoom).toBe(2)
       expect(withStored({ bitmapZoom: 2.5 }).bitmapZoom).toBe(2)
+    })
+  })
+
+  describe('entropyBlockSize — integer >= 1 else 256', () => {
+    it('keeps a positive integer', () => {
+      expect(withStored({ entropyBlockSize: 1 }).entropyBlockSize).toBe(1)
+      expect(withStored({ entropyBlockSize: 4096 }).entropyBlockSize).toBe(4096)
+    })
+
+    it('falls zero, a negative, or a fraction back to 256', () => {
+      expect(withStored({ entropyBlockSize: 0 }).entropyBlockSize).toBe(256)
+      expect(withStored({ entropyBlockSize: -3 }).entropyBlockSize).toBe(256)
+      expect(withStored({ entropyBlockSize: 1.5 }).entropyBlockSize).toBe(256)
     })
   })
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AKAI,
+  buildReverseTable,
   charFor,
   CODE_PAGES,
   CP437,
@@ -172,5 +173,59 @@ describe('charFor — byte is masked to 0–255', () => {
   it('ignores bits above the low byte', () => {
     expect(charFor(0x141, 'ascii')).toBe(charFor(0x41, 'ascii'))
     expect(charFor(0x1c9, 'cp437')).toBe(charFor(0xc9, 'cp437'))
+  })
+})
+
+describe('buildReverseTable (#105) — restricted to real, injective entries', () => {
+  it('ascii: every printable byte maps back to itself, one glyph one byte', () => {
+    const table = buildReverseTable('ascii')
+    expect(table.get('A')).toBe(0x41)
+    expect(table.get('~')).toBe(0x7e)
+    expect(table.get(' ')).toBe(0x20)
+  })
+
+  it('ascii: the placeholder glyph is excluded, so a typed "." never resolves', () => {
+    const table = buildReverseTable('ascii')
+    expect(table.has(PLACEHOLDER_GLYPH)).toBe(false)
+    expect(table.has('.')).toBe(false)
+  })
+
+  it('cp437: the shared placeholder glyph is excluded even though cp437 never falls back to it', () => {
+    const table = buildReverseTable('cp437')
+    expect(table.has('.')).toBe(false)
+    // Every other printable ascii-range glyph cp437 shares with ascii stays reachable.
+    expect(table.get('A')).toBe(0x41)
+  })
+
+  it('cp437: a real, unique glyph resolves to its one byte', () => {
+    const table = buildReverseTable('cp437')
+    expect(table.get('╔')).toBe(0xc9) // the signature box-drawing corner
+    expect(table.get('α')).toBe(0xe0)
+  })
+
+  it('petscii: the duplicated graphics block (0xC0–0xDF mirrors 0x60–0x7F) is non-injective and excluded', () => {
+    const table = buildReverseTable('petscii')
+    // '♠' (0x61) is also rendered by 0xC1 — every glyph in 0x60–0x7F is
+    // duplicated by 0xC0–0xDF, so none of that block is typeable-searchable.
+    expect(table.has('♠')).toBe(false)
+    expect(table.has('π')).toBe(false) // rendered by several bytes (0x7E among them)
+  })
+
+  it('petscii: a glyph outside the duplicated block still resolves', () => {
+    const table = buildReverseTable('petscii')
+    expect(table.get('@')).toBe(0x40)
+    expect(table.get('A')).toBe(0x41)
+  })
+
+  it('akai: the genuine "." at 0x28 is excluded along with every placeholder-rendered byte past it', () => {
+    const table = buildReverseTable('akai')
+    expect(table.has('.')).toBe(false)
+    expect(table.get('A')).toBe(0x0b)
+    expect(table.get('9')).toBe(0x09)
+  })
+
+  it('caches the built table per codepage — repeated calls return the same instance', () => {
+    expect(buildReverseTable('ascii')).toBe(buildReverseTable('ascii'))
+    expect(buildReverseTable('ascii')).not.toBe(buildReverseTable('cp437'))
   })
 })

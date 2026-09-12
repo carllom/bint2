@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { inject, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
 import { byteSourceFactoryKey, defaultByteSourceFactory } from '@/byteSourceFactory'
+import {
+  defaultDerivedWorkClientFactory,
+  derivedWorkClientFactoryKey,
+} from '@/derivedWorkClientFactory'
 import { useDocumentStore } from '@/stores/document'
 
 // Phase-1 file open (plan §6, #21): one `File`, via this button's hidden
@@ -17,13 +21,17 @@ const DIRECTORY_REFUSAL = 'That’s a folder — drop a single file instead.'
 
 const documentStore = useDocumentStore()
 const createByteSource = inject(byteSourceFactoryKey, defaultByteSourceFactory)
+// The worker-crossing counterpart (#103, ADR-0013): built alongside the
+// ByteSource, from the same raw File, wherever a document opens — the one
+// place in the app that holds it before the store takes ownership.
+const createDerivedWorkClient = inject(derivedWorkClientFactoryKey, defaultDerivedWorkClientFactory)
 const button = useTemplateRef<HTMLButtonElement>('button')
 const input = useTemplateRef<HTMLInputElement>('input')
 const refusal = ref<string | null>(null)
 
 function open(file: File): void {
   refusal.value = null
-  documentStore.open(createByteSource(file), file.name)
+  documentStore.open(createByteSource(file), file.name, createDerivedWorkClient(file))
 }
 
 function onPickClick(): void {

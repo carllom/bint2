@@ -22,6 +22,8 @@ import FileDropZone from '@/components/FileDropZone.vue'
 import HexViewer from '@/components/HexViewer.vue'
 import InspectorPanel from '@/components/InspectorPanel.vue'
 import BitmapPanel from '@/components/BitmapPanel.vue'
+import EntropyPanel from '@/components/EntropyPanel.vue'
+import SearchResultsPanel from '@/components/SearchResultsPanel.vue'
 import StatusBar from '@/components/StatusBar.vue'
 import AccordionRoot from '@/components/shell/AccordionRoot.vue'
 import AccordionItem from '@/components/shell/AccordionItem.vue'
@@ -89,17 +91,31 @@ const openSections = computed<string[]>(() => {
   if (preferences.bitmapOpen) {
     open.push('bitmap')
   }
+  if (preferences.entropyOpen) {
+    open.push('entropy')
+  }
+  if (preferences.searchResultsOpen) {
+    open.push('search-results')
+  }
   return open
 })
 
 function onSectionsChange(values: string[]): void {
   const inspector = values.includes('inspector')
   const bitmap = values.includes('bitmap')
+  const entropyOpen = values.includes('entropy')
+  const searchResults = values.includes('search-results')
   if (inspector !== preferences.inspectorOpen) {
     preferences.setInspectorOpen(inspector)
   }
   if (bitmap !== preferences.bitmapOpen) {
     preferences.setBitmapOpen(bitmap)
+  }
+  if (entropyOpen !== preferences.entropyOpen) {
+    preferences.setEntropyOpen(entropyOpen)
+  }
+  if (searchResults !== preferences.searchResultsOpen) {
+    preferences.setSearchResultsOpen(searchResults)
   }
 }
 
@@ -195,6 +211,18 @@ function onHandleReset(): void {
                   <AccordionTrigger>Bitmap</AccordionTrigger>
                   <AccordionContent>
                     <BitmapPanel />
+                  </AccordionContent>
+                </AccordionItem>
+                <AccordionItem value="entropy">
+                  <AccordionTrigger>Entropy</AccordionTrigger>
+                  <AccordionContent>
+                    <EntropyPanel />
+                  </AccordionContent>
+                </AccordionItem>
+                <AccordionItem value="search-results">
+                  <AccordionTrigger>Search results</AccordionTrigger>
+                  <AccordionContent>
+                    <SearchResultsPanel />
                   </AccordionContent>
                 </AccordionItem>
               </AccordionRoot>

@@ -99,10 +99,10 @@ describe('the Sidebar shell — the accordion (plan §3.1)', () => {
     await openDoc()
 
     const states = app.findAll('.accordion-item').map((i) => i.attributes('data-state'))
-    expect(states).toEqual(['open', 'closed'])
-    // Fixed order: Inspector first, Bitmap second.
+    expect(states).toEqual(['open', 'closed', 'closed', 'closed'])
+    // Fixed order: Inspector, Bitmap, Entropy, Search results (CONTEXT.md).
     const triggers = app.findAll('button.accordion-trigger').map((t) => t.text())
-    expect(triggers).toEqual(['Inspector', 'Bitmap'])
+    expect(triggers).toEqual(['Inspector', 'Bitmap', 'Entropy', 'Search results'])
   })
 
   it('unmounts a closed section (`unmount-on-hide`) — the Bitmap holds nothing until opened', async () => {
@@ -127,6 +127,14 @@ describe('the Sidebar shell — the accordion (plan §3.1)', () => {
     await app.findAll('button.accordion-trigger')[0]!.trigger('click') // close Inspector
     expect(preferences.inspectorOpen).toBe(false)
     expect(storedPreferences().inspectorOpen).toBe(false)
+
+    await app.findAll('button.accordion-trigger')[2]!.trigger('click') // open Entropy (#107)
+    expect(preferences.entropyOpen).toBe(true)
+    expect(storedPreferences().entropyOpen).toBe(true)
+
+    await app.findAll('button.accordion-trigger')[3]!.trigger('click') // open Search results (#106)
+    expect(preferences.searchResultsOpen).toBe(true)
+    expect(storedPreferences().searchResultsOpen).toBe(true)
   })
 
   it('honours a persisted open set on the next mount', async () => {
@@ -138,6 +146,8 @@ describe('the Sidebar shell — the accordion (plan §3.1)', () => {
     expect(app.findAll('.accordion-item').map((i) => i.attributes('data-state'))).toEqual([
       'closed',
       'open',
+      'closed',
+      'closed',
     ])
   })
 })

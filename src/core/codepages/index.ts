@@ -57,4 +57,54 @@ export function charFor(byte: number, codePage: CodePage): string {
   return TABLES[codePage][value] ?? PLACEHOLDER_GLYPH
 }
 
+/**
+ * The glyph→byte inverse of {@link charFor}, for text-mode search (#105,
+ * ticket #97's resolution). Restricted to **real, injective** entries: a
+ * glyph qualifies only when exactly one byte (0–255) renders it, so a typed
+ * character always resolves to one unambiguous source byte, never a guess
+ * among several. Two kinds of byte are excluded on principle, not just by
+ * counting to more than one:
+ *
+ * - Any byte whose glyph is {@link PLACEHOLDER_GLYPH} — even a codepage
+ *   design that only ever produces it from one specific byte (AKAI's genuine
+ *   `.` at 0x28, CP437's genuine `.` at 0x2E, both of which happen to share
+ *   the placeholder's own character) stays out, so a typed `.` never risks
+ *   resolving to whichever codepage-specific byte happens to be "the real
+ *   one" this session — hex mode is the path for those bytes instead.
+ * - A glyph duplicated across distinct real bytes (PETSCII's 0xC0–0xDF
+ *   repeating 0x60–0x7F) — non-typeable anyway, since the reader can only
+ *   type the glyph, never which byte they meant.
+ *
+ * Every codepage's table is static, so the result is cached per `codePage`
+ * (there are only six, ever): `parseTextPattern` calls this from a Vue
+ * `computed` that re-evaluates on every keystroke in text mode, and rebuilding
+ * two 256-entry `Map`s per keystroke would be pure waste.
+ */
+const reverseTableCache = new Map<CodePage, ReadonlyMap<string, number>>()
+
+export function buildReverseTable(codePage: CodePage): ReadonlyMap<string, number> {
+  const cached = reverseTableCache.get(codePage)
+  if (cached) {
+    return cached
+  }
+  const bytesFor = new Map<string, number[]>()
+  for (let byte = 0; byte <= 0xff; byte++) {
+    const glyph = charFor(byte, codePage)
+    const bytes = bytesFor.get(glyph)
+    if (bytes) {
+      bytes.push(byte)
+    } else {
+      bytesFor.set(glyph, [byte])
+    }
+  }
+  const table = new Map<string, number>()
+  for (const [glyph, bytes] of bytesFor) {
+    if (bytes.length === 1 && glyph !== PLACEHOLDER_GLYPH) {
+      table.set(glyph, bytes[0]!)
+    }
+  }
+  reverseTableCache.set(codePage, table)
+  return table
+}
+
 export { CP437, WINDOWS_1252, PETSCII, PETSCII_LOWER, AKAI }

@@ -7,7 +7,9 @@
 //   - the eslint override for `src/core/**` in eslint.config.ts, and
 //   - src/core/__tests__/framework-free.spec.ts
 //
-// Phase 1 builds no Web Worker (ADR-0001) — no stub worker module lives here.
+// Phase 2 trips ADR-0001's Derived-work trigger (ADR-0013): derived-work.worker.ts
+// is the real Web Worker, DerivedWorkClient its main-thread client. ByteSource
+// and PageCache stay frozen and untouched by either.
 
 export type {
   BitmapOffsetAtParams,
@@ -22,12 +24,41 @@ export { bitmapOffsetAt, eofByteSlots, packBitmap, rowByteSpan } from './bitmap'
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
 export type { CodePage } from './codepages'
-export { charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'
+export type {
+  DerivedWorkErrorCode,
+  DerivedWorkJobKind,
+  DerivedWorkRequestMessage,
+  DerivedWorkResponseMessage,
+  SearchParams,
+  SearchProgressExtra,
+  SearchResult,
+  StatsParams,
+  StatsResult,
+} from './DerivedWork'
+export { FIND_ALL_MAX_RESULTS } from './DerivedWork'
+export type {
+  DerivedWorkClientDeps,
+  DerivedWorkJobHandle,
+  DerivedWorkWorkerLike,
+  SearchProgress,
+  StatsProgress,
+} from './DerivedWorkClient'
+export { DerivedWorkCancelled, DerivedWorkClient, DerivedWorkError } from './DerivedWorkClient'
+export { buildReverseTable, charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'
+export type {
+  EntropyBlockAtParams,
+  EntropyBlockRangeParams,
+  EntropyColorTheme,
+} from './entropyMap'
+export { entropyBlockAt, entropyBlockRange, entropyColor } from './entropyMap'
+export type { HistogramFrequencies } from './histogram'
+export { barHeight, histogramFrequencies, maxFrequency } from './histogram'
 export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export {
   addressWidthFor,
   describeSelection,
+  parseHexPattern,
   parseOffset,
   toAddress,
   toAsciiChar,
@@ -41,6 +72,8 @@ export {
 } from './format'
 export type { DecodeOptions, InspectorRow } from './inspector'
 export { decodeInspectorRow, INSPECTOR_READ_LENGTH, INSPECTOR_ROWS } from './inspector'
+export type { MatchScopeRange, MatchStep, SearchDirection } from './searchMatches'
+export { parseTextPattern, scopeMatches, stepMatch } from './searchMatches'
 export type { Selection, SelectionRange } from './selection'
 export { cursorAt, extendTo, isCollapsed, rangeOf } from './selection'
 export type { ThumbGeometry, ViewportMetrics } from './viewport'
