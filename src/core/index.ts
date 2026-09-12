@@ -7,7 +7,9 @@
 //   - the eslint override for `src/core/**` in eslint.config.ts, and
 //   - src/core/__tests__/framework-free.spec.ts
 //
-// Phase 1 builds no Web Worker (ADR-0001) — no stub worker module lives here.
+// Phase 2 trips ADR-0001's Derived-work trigger (ADR-0013): derived-work.worker.ts
+// is the real Web Worker, DerivedWorkClient its main-thread client. ByteSource
+// and PageCache stay frozen and untouched by either.
 
 export type {
   BitmapOffsetAtParams,
@@ -22,6 +24,22 @@ export { bitmapOffsetAt, eofByteSlots, packBitmap, rowByteSpan } from './bitmap'
 export type { ByteSource, ByteSourceErrorCode } from './ByteSource'
 export { ByteSourceError, FileByteSource } from './FileByteSource'
 export type { CodePage } from './codepages'
+export type {
+  DerivedWorkErrorCode,
+  DerivedWorkJobKind,
+  DerivedWorkRequestMessage,
+  DerivedWorkResponseMessage,
+  SearchParams,
+  SearchProgressExtra,
+  SearchResult,
+} from './DerivedWork'
+export type {
+  DerivedWorkClientDeps,
+  DerivedWorkJobHandle,
+  DerivedWorkWorkerLike,
+  SearchProgress,
+} from './DerivedWorkClient'
+export { DerivedWorkCancelled, DerivedWorkClient, DerivedWorkError } from './DerivedWorkClient'
 export { charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'
 export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
