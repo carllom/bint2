@@ -32,11 +32,32 @@ your machine and is read through the browser's local File API.
   focused, sets one view-wide little- or big-endian order (default little).
   Every multi-byte number the Inspector decodes obeys it; the char column, the
   offset column, and the raw-byte copies never do.
-- **Inspect** — a docked panel decodes the bytes at the cursor into every
-  primitive numeric type at once — `u8 i8 bin` / `u16 i16` / `u32 i32` /
-  `u64 i64` / `f32 f64`. Integers are decimal with a panel-wide `hex` toggle;
-  the panel docks bottom or right and collapses to a bar. Click a value to copy
-  it. It is read on demand, never spoken.
+- **Sidebar** — a resizable panel down the right edge, shown once a file is
+  open. Drag the splitter handle to resize it (persisted), or double-click the
+  handle to reset it to the default width; drag it all the way shut to collapse
+  the Sidebar to nothing, and back out (or `Enter` on the handle) to restore it.
+  It holds two independently collapsible sections — the **Inspector**, then the
+  **Bitmap** — each opened or closed from its own header, also persisted.
+- **Inspect** — the Sidebar's Inspector section decodes the bytes at the cursor
+  into every primitive numeric type at once — `u8 i8 bin` / `u16 i16` /
+  `u32 i32` / `u64 i64` / `f32 f64`. Integers are decimal with a section-wide
+  `hex` toggle. Click a value to copy it. It is read on demand, never spoken.
+- **Bitmap** — the Sidebar's other section renders a run of the document's
+  bytes as a 1-bit-per-pixel image: each byte is eight horizontal pixels,
+  most-significant bit leftmost, a set bit painting the foreground in the
+  current theme's colours. Its **Origin** — the byte the top-left pixel maps
+  to — **follows** the Cursor byte-for-byte by default, sliding the image as
+  the Cursor moves. Press `L` (or the section's toggle button) to **lock** it
+  at the current offset: the Cursor then moves independently while the image
+  holds still, and a marker appears in the hex grid's left gutter showing where
+  the locked run sits — a chevron at the edge if it has scrolled out of view;
+  click the chevron to jump the grid there. `L` again resumes following. With
+  the section focused, `,` / `.` change how many bytes wide each row is, and
+  `Shift+,` / `Shift+.` change the gap added between rows (for viewing one
+  column of a wider repeating structure in isolation); while locked, the arrow
+  keys, `PageUp` / `PageDown`, and `Home` / `End` nudge the locked Origin
+  instead of the Cursor. Clicking a pixel moves the Cursor there (Shift-click
+  extends the Selection), in either mode.
 - **Code page** — a toolbar selector swaps the char column's glyph table:
   `ASCII` (default), `CP437`, `Windows-1252`, two `PETSCII` sets, and `AKAI`.
   One glyph per byte, view-wide; it changes only the visible char column and
@@ -66,6 +87,12 @@ raw-text copy still decodes the selection as UTF-8 regardless of the code page.
 
 **The Inspector shows primitive numerics only.** No timestamps, GUIDs, colours,
 or disassembly, and no text line — the char column owns glyph rendering.
+
+**The Bitmap is read-only, 1-bpp monochrome only, and has no export.** It never
+writes bytes back, decodes no colour or multi-bit pixel formats, and there is no
+way to save the rendered image. Selecting pixels is click and Shift-click only —
+no click-and-drag range select — and there is no typed Origin field; follow,
+lock, and Goto together cover targeting it.
 
 ## Accessibility
 

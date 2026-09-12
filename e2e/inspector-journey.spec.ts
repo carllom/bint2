@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { FIXTURE_PATH } from './support/fixture'
+import { gotoOffset } from './support/goto'
 
 // Phase 1.5's one added end-to-end journey (plan §8, seam 3), deliberately thin
 // in the same spirit as the phase-1 keyboard journey. Byte `i` of the fixture
@@ -17,9 +18,7 @@ test('inspector row re-decodes on `b`; the code page re-glyphs the char column',
   await expect(page.locator('[data-field="file-name"]')).not.toBeEmpty()
 
   // Move the Cursor to an exact offset with the keyboard path.
-  await page.keyboard.press('Control+g')
-  await page.locator('#goto-box-input').fill('0x1000')
-  await page.keyboard.press('Enter')
+  await gotoOffset(page, '0x1000')
   await expect(page.locator('[data-field="cursor-offset"]')).toContainText('0x1000')
 
   // The Inspector is visible and decodes the bytes at the Cursor. u16 of
