@@ -20,6 +20,9 @@ export type DerivedWorkErrorCode = 'read-failed' | 'source-gone'
 
 export type DerivedWorkJobKind = 'search' | 'stats'
 
+/** Find All's cap (#106, ADR-0014) — the exact number resolved on ticket #100. */
+export const FIND_ALL_MAX_RESULTS = 500
+
 /**
  * A byte-sequence, forward, whole-file scan. `pattern` is always concrete
  * bytes — hex mode's raw input, or text mode's term converted through the
@@ -40,6 +43,13 @@ export interface SearchParams {
    * letters, not re-derive the whole Code page inside the scan.
    */
   readonly caseInsensitive?: boolean
+  /**
+   * Find All's cap (#106, ADR-0014): once set, the scan itself stops early
+   * the instant `matches.length` reaches this — never scanning further than
+   * necessary just to truncate afterward. Absent (Find Next/Previous's own
+   * whole-file dispatch) means unbounded, exactly today's behaviour.
+   */
+  readonly maxResults?: number
 }
 
 export interface SearchResult {
@@ -49,6 +59,15 @@ export interface SearchResult {
    * list without structured-clone (ADR-0013 §2.5).
    */
   readonly matches: Float64Array
+  /**
+   * True once `maxResults` (#106) cut the scan short — the labeled-partial
+   * case ADR-0014 decided ("first N shown — narrow your search"), never a
+   * refusal. `searchForward` always sets this concretely (`false` for an
+   * uncapped scan); optional only so the pre-#106 `SearchResult` literals
+   * scattered through the existing test suites keep type-checking — a
+   * consumer that cares treats a missing value as `false`.
+   */
+  readonly partial?: boolean
 }
 
 /** Progress's job-specific `extra` payload for a search job (ADR-0013 §2.5). */

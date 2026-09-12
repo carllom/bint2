@@ -98,10 +98,11 @@ export async function searchForward(
 
   const size = file.size
   const matches: number[] = []
+  const maxResults = params.maxResults
 
   if (pattern.length === 0 || size === 0) {
     options.onProgress?.(1, { matchCount: 0 })
-    return { result: { matches: new Float64Array(0) }, cancelled: false }
+    return { result: { matches: new Float64Array(0), partial: false }, cancelled: false }
   }
 
   const chunks = chunkedReadAhead(file, 0, size, { chunkSize, readAheadDepth: depth })
@@ -110,6 +111,23 @@ export async function searchForward(
   let carry = new Uint8Array(0)
   let lastYield = now()
   let cancelled = false
+  // Set once one match *past* `maxResults` (#106, ADR-0014) is seen — checked
+  // after every push, never only between chunks, so a single chunk holding
+  // several matches past the cap still cuts off at exactly the right one.
+  // Deliberately one past the cap, not AT it: a file with precisely
+  // `maxResults` matches and nothing more is a complete result, not a
+  // partial one, and the only way to tell the two apart is to keep looking
+  // for one more before deciding. The overshoot match itself is trimmed off
+  // below.
+  let hitCap = false
+
+  /** Record one match, in the one place that also decides `hitCap` (#106). */
+  function pushMatch(matchOffset: number): void {
+    matches.push(matchOffset)
+    if (maxResults !== undefined && matches.length > maxResults) {
+      hitCap = true
+    }
+  }
 
   while (true) {
     if (isCancelled()) {
@@ -129,24 +147,35 @@ export async function searchForward(
       const boundary = concat(carry, boundaryTail)
       const boundaryBase = offset - carry.length
       const limit = Math.min(carry.length - 1, boundary.length - pattern.length)
-      for (let i = 0; i <= limit; i++) {
+      for (let i = 0; i <= limit && !hitCap; i++) {
         if (matchesAt(boundary, i, pattern, caseInsensitive)) {
-          matches.push(boundaryBase + i)
+          pushMatch(boundaryBase + i)
         }
       }
     }
 
     // Matches starting within this chunk itself.
-    const limit = bytes.length - pattern.length
-    for (let i = 0; i <= limit; i++) {
-      if (matchesAt(bytes, i, pattern, caseInsensitive)) {
-        matches.push(offset + i)
+    if (!hitCap) {
+      const limit = bytes.length - pattern.length
+      for (let i = 0; i <= limit && !hitCap; i++) {
+        if (matchesAt(bytes, i, pattern, caseInsensitive)) {
+          pushMatch(offset + i)
+        }
       }
     }
 
     carry = nextCarry(carry, bytes, keepLen)
 
-    options.onProgress?.((offset + bytes.length) / size, { matchCount: matches.length })
+    // Never report more than `maxResults` even on the chunk that pushed the
+    // one overshoot match past it (#106) — `matches.length` itself is
+    // trimmed back to `maxResults` below, but only once, after the loop.
+    const reportedMatchCount =
+      maxResults !== undefined ? Math.min(matches.length, maxResults) : matches.length
+    options.onProgress?.((offset + bytes.length) / size, { matchCount: reportedMatchCount })
+
+    if (hitCap) {
+      break
+    }
 
     if (now() - lastYield >= yieldBudgetMs) {
       await yieldToEventLoop()
@@ -154,5 +183,10 @@ export async function searchForward(
     }
   }
 
-  return { result: { matches: Float64Array.from(matches) }, cancelled }
+  // Trim the one overshoot match past the cap back off (see the `hitCap`
+  // comment above) — the returned list is always exactly `maxResults` long
+  // when partial, never `maxResults + 1`.
+  const finalMatches = hitCap ? matches.slice(0, maxResults) : matches
+
+  return { result: { matches: Float64Array.from(finalMatches), partial: hitCap }, cancelled }
 }

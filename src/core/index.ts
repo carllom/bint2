@@ -35,6 +35,7 @@ export type {
   StatsParams,
   StatsResult,
 } from './DerivedWork'
+export { FIND_ALL_MAX_RESULTS } from './DerivedWork'
 export type {
   DerivedWorkClientDeps,
   DerivedWorkJobHandle,

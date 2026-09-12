@@ -33,6 +33,7 @@ function snapshot(store: ReturnType<typeof usePreferencesStore>): Preferences {
     sidebarWidth: store.sidebarWidth,
     inspectorOpen: store.inspectorOpen,
     bitmapOpen: store.bitmapOpen,
+    searchResultsOpen: store.searchResultsOpen,
     intHex: store.intHex,
     byteOrder: store.byteOrder,
     codePage: store.codePage,
@@ -49,6 +50,7 @@ const DEFAULTS: Preferences = {
   sidebarWidth: 320,
   inspectorOpen: true,
   bitmapOpen: false,
+  searchResultsOpen: false,
   intHex: false,
   byteOrder: 'le',
   codePage: 'ascii',
@@ -97,6 +99,7 @@ describe('preferences store — setters persist the whole object as JSON', () =>
     store.setSidebarWidth(440)
     store.setInspectorOpen(false)
     store.setBitmapOpen(true)
+    store.setSearchResultsOpen(true)
     store.setIntHex(true)
     store.setByteOrder('be')
     store.setCodePage('cp437')
@@ -111,6 +114,7 @@ describe('preferences store — setters persist the whole object as JSON', () =>
       sidebarWidth: 440,
       inspectorOpen: false,
       bitmapOpen: true,
+      searchResultsOpen: true,
       intHex: true,
       byteOrder: 'be',
       codePage: 'cp437',
@@ -167,6 +171,7 @@ describe('preferences store — per-field validation on load (plan §2)', () => 
       sidebarWidth: '320',
       inspectorOpen: 1,
       bitmapOpen: null,
+      searchResultsOpen: 'no',
       intHex: 'no',
       byteOrder: ['le'],
       codePage: 3,

@@ -63,10 +63,12 @@ describe('searchForward', () => {
     const file = fileWithPatternAt(20, [0xaa], [])
     const empty = await searchForward(file, { pattern: new Uint8Array(0) })
     expect(Array.from(empty.result.matches)).toEqual([])
+    expect(empty.result.partial).toBe(false)
 
     const emptyFile = new File([], 'empty.bin')
     const onEmptyFile = await searchForward(emptyFile, { pattern: Uint8Array.of(0xaa) })
     expect(Array.from(onEmptyFile.result.matches)).toEqual([])
+    expect(onEmptyFile.result.partial).toBe(false)
   })
 
   it('reports progress between chunks as offset/size, with a running match count', async () => {
@@ -157,6 +159,79 @@ describe('searchForward', () => {
     await expect(
       searchForward(goneFile(64), { pattern: Uint8Array.of(0xaa) }, { chunkSize: 16 }),
     ).rejects.toBeInstanceOf(DOMException)
+  })
+
+  describe('maxResults (#106, ADR-0014)', () => {
+    it('stops early once the cap is reached, ahead of chunks it never reads', async () => {
+      // A match at every position 0..7 (pattern length 1) across 4 chunks of
+      // 2 bytes each — stopping at maxResults 3 must never even look at the
+      // matches from offset 3 onward.
+      const file = new File(
+        [Uint8Array.from([0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa])],
+        'x.bin',
+      )
+
+      const { result, cancelled } = await searchForward(
+        file,
+        { pattern: Uint8Array.of(0xaa), maxResults: 3 },
+        { chunkSize: 2 },
+      )
+
+      expect(cancelled).toBe(false)
+      expect(Array.from(result.matches)).toEqual([0, 1, 2])
+      expect(result.partial).toBe(true)
+    })
+
+    it('is not partial when the file has exactly the cap, or fewer, matches', async () => {
+      const pattern = [0xaa, 0xbb]
+      const file = fileWithPatternAt(48, pattern, [3, 20, 40])
+
+      const exact = await searchForward(file, { pattern: Uint8Array.from(pattern), maxResults: 3 })
+      expect(Array.from(exact.result.matches)).toEqual([3, 20, 40])
+      expect(exact.result.partial).toBe(false)
+
+      const under = await searchForward(file, { pattern: Uint8Array.from(pattern), maxResults: 10 })
+      expect(Array.from(under.result.matches)).toEqual([3, 20, 40])
+      expect(under.result.partial).toBe(false)
+    })
+
+    it('stops mid-chunk exactly at the cap, even when one chunk holds several matches past it', async () => {
+      // Every byte matches; cap 2 must cut the very first chunk short rather
+      // than returning all matches the chunk happens to contain.
+      const file = new File([Uint8Array.from([0xaa, 0xaa, 0xaa, 0xaa])], 'x.bin')
+
+      const { result } = await searchForward(
+        file,
+        { pattern: Uint8Array.of(0xaa), maxResults: 2 },
+        { chunkSize: 16 },
+      )
+
+      expect(Array.from(result.matches)).toEqual([0, 1])
+      expect(result.partial).toBe(true)
+    })
+
+    it('is not partial when there is no cap at all (Next/Previous’s uncapped whole-file scan)', async () => {
+      const file = fileWithPatternAt(20, [0xaa], [5])
+      const { result } = await searchForward(file, { pattern: Uint8Array.of(0xaa) })
+      expect(result.partial).toBe(false)
+    })
+
+    it('never reports a progress matchCount past the cap, even on the chunk that hits it', async () => {
+      // Every byte matches; cap 2 in a single 16-byte chunk pushes a third,
+      // overshoot match before the cap is recognised — the reported count on
+      // that chunk's progress call must still read 2, not 3, matching the
+      // trimmed result the caller eventually gets.
+      const file = new File([Uint8Array.from([0xaa, 0xaa, 0xaa, 0xaa])], 'x.bin')
+      const calls: number[] = []
+
+      await searchForward(
+        file,
+        { pattern: Uint8Array.of(0xaa), maxResults: 2 },
+        { chunkSize: 16, onProgress: (_percent, extra) => calls.push(extra.matchCount) },
+      )
+
+      expect(calls).toEqual([2])
+    })
   })
 
   describe('caseInsensitive (#105)', () => {

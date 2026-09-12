@@ -55,6 +55,8 @@ export interface Preferences {
   readonly inspectorOpen: boolean
   /** The Bitmap accordion section is open (plan §3.1, §4.2). */
   readonly bitmapOpen: boolean
+  /** The Search results accordion section is open (#106, plan §3.6). */
+  readonly searchResultsOpen: boolean
   /** Inspector integer rows shown as hex rather than decimal (#54, plan §3.3). */
   readonly intHex: boolean
   /** Little- or big-endian, governing every multi-byte numeric decode (#55). */
@@ -84,6 +86,7 @@ const DEFAULTS: Preferences = {
   sidebarWidth: 320,
   inspectorOpen: true,
   bitmapOpen: false,
+  searchResultsOpen: false,
   intHex: false,
   byteOrder: 'le',
   codePage: 'ascii',
@@ -159,6 +162,9 @@ function loadPreferences(): Preferences {
         : DEFAULTS.sidebarWidth,
     inspectorOpen: isBoolean(stored.inspectorOpen) ? stored.inspectorOpen : DEFAULTS.inspectorOpen,
     bitmapOpen: isBoolean(stored.bitmapOpen) ? stored.bitmapOpen : DEFAULTS.bitmapOpen,
+    searchResultsOpen: isBoolean(stored.searchResultsOpen)
+      ? stored.searchResultsOpen
+      : DEFAULTS.searchResultsOpen,
     intHex: isBoolean(stored.intHex) ? stored.intHex : DEFAULTS.intHex,
     byteOrder: isByteOrder(stored.byteOrder) ? stored.byteOrder : DEFAULTS.byteOrder,
     codePage: isCodePage(stored.codePage) ? stored.codePage : DEFAULTS.codePage,
@@ -174,7 +180,12 @@ function loadPreferences(): Preferences {
     bitmapHeight: isIntInRange(stored.bitmapHeight, BITMAP_HEIGHT_MIN, BITMAP_HEIGHT_MAX)
       ? stored.bitmapHeight
       : null,
-    bitmapZoom: intInRange(stored.bitmapZoom, BITMAP_ZOOM_MIN, BITMAP_ZOOM_MAX, DEFAULTS.bitmapZoom),
+    bitmapZoom: intInRange(
+      stored.bitmapZoom,
+      BITMAP_ZOOM_MIN,
+      BITMAP_ZOOM_MAX,
+      DEFAULTS.bitmapZoom,
+    ),
     bitmapInvert: isBoolean(stored.bitmapInvert) ? stored.bitmapInvert : DEFAULTS.bitmapInvert,
   }
 }
@@ -186,6 +197,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const sidebarWidth = ref(initial.sidebarWidth)
   const inspectorOpen = ref(initial.inspectorOpen)
   const bitmapOpen = ref(initial.bitmapOpen)
+  const searchResultsOpen = ref(initial.searchResultsOpen)
   const intHex = ref(initial.intHex)
   const byteOrder = ref<ByteOrder>(initial.byteOrder)
   const codePage = ref<CodePage>(initial.codePage)
@@ -216,6 +228,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
       sidebarWidth: sidebarWidth.value,
       inspectorOpen: inspectorOpen.value,
       bitmapOpen: bitmapOpen.value,
+      searchResultsOpen: searchResultsOpen.value,
       intHex: intHex.value,
       byteOrder: byteOrder.value,
       codePage: codePage.value,
@@ -254,6 +267,11 @@ export const usePreferencesStore = defineStore('preferences', () => {
 
   function setBitmapOpen(next: boolean): void {
     bitmapOpen.value = next
+    persist()
+  }
+
+  function setSearchResultsOpen(next: boolean): void {
+    searchResultsOpen.value = next
     persist()
   }
 
@@ -302,6 +320,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     sidebarWidth,
     inspectorOpen,
     bitmapOpen,
+    searchResultsOpen,
     intHex,
     byteOrder,
     codePage,
@@ -315,6 +334,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setSidebarWidth,
     setInspectorOpen,
     setBitmapOpen,
+    setSearchResultsOpen,
     setIntHex,
     setByteOrder,
     setCodePage,

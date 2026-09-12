@@ -10,6 +10,7 @@ export interface FindBoxHandle {
 import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import {
   charFor,
+  FIND_ALL_MAX_RESULTS,
   isCollapsed,
   parseHexPattern,
   parseTextPattern,
@@ -27,6 +28,7 @@ import type {
 } from '@/core'
 import { useDocumentStore } from '@/stores/document'
 import { usePreferencesStore } from '@/stores/preferences'
+import { useSearchResultsStore } from '@/stores/searchResults'
 
 // Search (#103/#105, ADR-0013, docs/plan-phase2.md §3): a transient modal Find
 // box, GotoBox-styled, opening on `/` while the grid has focus (HexViewer's
@@ -58,6 +60,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const documentStore = useDocumentStore()
 const preferencesStore = usePreferencesStore()
+const searchResultsStore = useSearchResultsStore()
 
 const open = ref(false)
 // Term, mode, case-sensitivity and scope all persist across close -> reopen
@@ -103,10 +106,20 @@ interface MatchCache {
   readonly caseInsensitive: boolean
   readonly matches: Float64Array
 }
+/**
+ * One job at a time (ADR-0013 §2.4/§2.7: the underlying `DerivedWorkClient`
+ * allows only a single in-flight job, of any kind). `kind` distinguishes a
+ * Next/Previous dispatch (`'step'`) from Find All (`'findAll'`, #106) so the
+ * completion handler below knows whether to feed the Next/Previous `cache`
+ * or the Search results store — the two share this one
+ * `pending`/`progressPercent`/Cancel UI (ADR-0013 §2.5: "one progress-bar-
+ * plus-Cancel UI drives every job kind"), but never each other's result.
+ */
 interface RunningJob {
   readonly handle: DerivedWorkJobHandle<SearchResult>
   readonly pattern: Uint8Array
   readonly caseInsensitive: boolean
+  readonly kind: 'step' | 'findAll'
 }
 
 // The last *completed* scan, cached against the exact pattern bytes it answers
@@ -180,10 +193,40 @@ function runFrom(matches: Float64Array, direction: SearchDirection): void {
   applyMatch(stepMatch(scopeMatches(matches, range), currentOffset(), direction), direction)
 }
 
+/**
+ * Call immediately before dispatching a new job of either kind, right where
+ * `DerivedWorkClient` is about to synchronously cancel/supersede whatever
+ * job is currently running (`client.search()`'s own cancel-on-new-job rule,
+ * ADR-0013 §2.4/§2.7). If the job being superseded was a Find All, its own
+ * `.then`/`.catch` cannot be relied on to clear `searchResultsStore.pending`
+ * — by the time its rejection settles (a microtask), the dispatch that
+ * superseded it has already reassigned `job` to itself, so that Find All's
+ * own stale-callback guard (`job?.handle !== handle`) skips its cleanup
+ * entirely. Doing it here, synchronously, before that reassignment, is what
+ * actually keeps `searchResultsStore.pending` in lockstep with "a Find All
+ * is the job currently in flight" — the invariant `cancelPending` below
+ * otherwise relies on.
+ */
+function aboutToSupersede(): void {
+  if (job !== null && job.kind === 'findAll') {
+    searchResultsStore.clearPending()
+  }
+}
+
+/**
+ * Cancels whichever job is running, step or Find All alike — harmless to call
+ * when nothing is (both branches are then no-ops). `searchResultsStore`'s own
+ * pending flag mirrors `job?.kind === 'findAll'` 1:1 (only one job can ever be
+ * in flight at a time, and every dispatch that changes `job` — including a
+ * supersession, via `aboutToSupersede` above — keeps this in step), so
+ * clearing it here unconditionally is always correct, never a false clear of
+ * a Find All that was not in fact running.
+ */
 function cancelPending(): void {
   job?.handle.cancel()
   job = null
   pending.value = false
+  searchResultsStore.clearPending()
 }
 
 /** Toggle whole-file / Selection scope. Capturing happens only here — see the field doc above. */
@@ -226,9 +269,18 @@ function find(direction: SearchDirection): void {
     return
   }
 
-  // Same-dispatch Next/Previous while a job for it is already in flight — a
-  // no-op (ADR-0013 §2.7): it never queues, never cancels itself.
-  if (pending.value && job !== null && sameBytes(job.pattern, p) && job.caseInsensitive === ci) {
+  // Same-dispatch Next/Previous while a step job for it is already in flight
+  // — a no-op (ADR-0013 §2.7): it never queues, never cancels itself. A Find
+  // All in flight for this same pattern is a *different* dispatch (a capped
+  // scan, not this uncapped one) and falls through to supersede it below,
+  // same as any other different job would.
+  if (
+    pending.value &&
+    job !== null &&
+    job.kind === 'step' &&
+    sameBytes(job.pattern, p) &&
+    job.caseInsensitive === ci
+  ) {
     return
   }
 
@@ -239,14 +291,17 @@ function find(direction: SearchDirection): void {
 
   // A different dispatch reaches here while another job is running:
   // `search()` below supersedes it on its own (DerivedWorkClient's own
-  // cancel-on-new-job rule), so nothing extra is cancelled here.
+  // cancel-on-new-job rule), so nothing extra is cancelled here — except
+  // `searchResultsStore.pending`, which `aboutToSupersede` below must clear
+  // synchronously if the job being superseded was a Find All (see its doc).
+  aboutToSupersede()
   statusMessage.value = null
   pending.value = true
   progressPercent.value = 0
   const handle = client.search({ pattern: p, caseInsensitive: ci }, (progress: SearchProgress) => {
     progressPercent.value = progress.percent
   })
-  job = { handle, pattern: p, caseInsensitive: ci }
+  job = { handle, pattern: p, caseInsensitive: ci, kind: 'step' }
 
   handle.result
     .then((result: SearchResult) => {
@@ -267,6 +322,90 @@ function find(direction: SearchDirection): void {
       // rather than reporting a cancel as "no match".
       pending.value = false
       job = null
+    })
+}
+
+/**
+ * Find All (#106, ADR-0014): button-only, always whole-file — deliberately
+ * ignoring the Selection scope toggle, unlike Next/Previous. The underlying
+ * `'search'` job the worker runs is inherently whole-file-only (it carries
+ * no range, ADR-0013 §2.4); scope narrows Next/Previous by filtering that
+ * whole-file result locally (`scopeMatches`), which only works because that
+ * scan is uncapped. Find All's scan, by contrast, stops the instant it hits
+ * the cap (`maxResults`) — if it also had to honor a Selection scope, an
+ * early-capped whole-file scan could exhaust the cap entirely on matches
+ * outside the Selection before ever reaching it, silently hiding real
+ * in-Selection hits. Simpler and correct: Find All always answers for the
+ * whole file.
+ *
+ * Dispatches its own, separately-capped `'search'` job — never the
+ * Next/Previous `cache`, which must stay a complete, uncapped result for
+ * stepping to keep working correctly. Populates `searchResultsStore`
+ * instead, which is what the persistent Search results panel reads.
+ */
+function findAll(): void {
+  const p = pattern.value
+  if (p === null) {
+    return
+  }
+  const ci = caseInsensitive.value
+
+  // Same-dispatch Find All already in flight — a no-op, mirroring the
+  // same-term Next/Previous no-op above.
+  if (
+    pending.value &&
+    job !== null &&
+    job.kind === 'findAll' &&
+    sameBytes(job.pattern, p) &&
+    job.caseInsensitive === ci
+  ) {
+    return
+  }
+
+  const client = documentStore.derivedWorkClient
+  if (client === null) {
+    return
+  }
+
+  aboutToSupersede()
+  statusMessage.value = null
+  pending.value = true
+  progressPercent.value = 0
+  searchResultsStore.markPending()
+  const capturedMode = mode.value
+  const handle = client.search(
+    { pattern: p, caseInsensitive: ci, maxResults: FIND_ALL_MAX_RESULTS },
+    (progress: SearchProgress) => {
+      progressPercent.value = progress.percent
+    },
+  )
+  job = { handle, pattern: p, caseInsensitive: ci, kind: 'findAll' }
+
+  handle.result
+    .then((result: SearchResult) => {
+      if (job?.handle !== handle) {
+        return // superseded/cancelled before this landed
+      }
+      pending.value = false
+      job = null
+      searchResultsStore.setResults({
+        hits: result.matches,
+        matchLength: p.length,
+        partial: result.partial ?? false,
+        mode: capturedMode,
+      })
+    })
+    .catch(() => {
+      if (job?.handle !== handle) {
+        return
+      }
+      // Cancelled or errored: nothing new landed. `clearPending` (rather
+      // than leaving `searchResultsStore.pending` set) reverts the panel to
+      // showing its previous results as not-stale, since nothing further is
+      // now coming.
+      pending.value = false
+      job = null
+      searchResultsStore.clearPending()
     })
 }
 
@@ -381,7 +520,10 @@ function onFocusout(event: FocusEvent): void {
 // worker). Term, mode, case-sensitivity and scope all reset too: they persist
 // close -> reopen *within a document* (plan §3.1), not across an unrelated
 // file the reader has since opened. Closed the same way a newly opened
-// document supersedes GotoBox.
+// document supersedes GotoBox. The Search results panel's own hits are reset
+// here too (#106) — it has no watch of its own on the document, and its
+// content is exactly as invalid against a different/closed document as the
+// Next/Previous `cache` is.
 watch(
   () => documentStore.source,
   () => {
@@ -394,6 +536,7 @@ watch(
     scope.value = 'file'
     capturedRange.value = null
     open.value = false
+    searchResultsStore.reset()
   },
 )
 
@@ -470,6 +613,9 @@ defineExpose({ reveal } satisfies FindBoxHandle)
           @click="find('previous')"
         >
           Previous
+        </button>
+        <button type="button" class="find-box__find-all" :disabled="!canFind" @click="findAll">
+          Find All
         </button>
         <button v-if="pending" type="button" class="find-box__cancel" @click="cancel">
           Cancel
@@ -589,6 +735,7 @@ defineExpose({ reveal } satisfies FindBoxHandle)
 
 .find-box__next,
 .find-box__previous,
+.find-box__find-all,
 .find-box__cancel,
 .find-box__close,
 .find-box__mode-hex,
@@ -606,6 +753,7 @@ defineExpose({ reveal } satisfies FindBoxHandle)
 
 .find-box__next:disabled,
 .find-box__previous:disabled,
+.find-box__find-all:disabled,
 .find-box__scope-selection:disabled {
   color: var(--color-fg-dim);
   cursor: default;
