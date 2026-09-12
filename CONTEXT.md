@@ -154,3 +154,21 @@ where an off-screen Bitmap is pointed. Transient view chrome that carries no
 meaning of its own and disappears once the Origin follows the Cursor again — not
 an Annotation.
 _Avoid_: coverage, footprint, reveal, region
+
+**Entropy map**:
+A block-based Shannon-entropy heatmap over a contiguous run of the document's
+bytes — the whole file or the current Selection. Each block's entropy is
+painted as one strip segment on a thermal color scale; the Panel's block size
+is configurable, the same role Width plays for the Bitmap. A rendering of
+computed values, not the bytes themselves — distinct from the Bitmap, which
+paints the bits directly.
+_Avoid_: heatmap, entropy view, compression map
+
+**Byte histogram**:
+A normalized 256-value byte-frequency distribution over the same kind of range
+as the Entropy map — the count of each byte value divided by the range's total
+length. Has no positional axis: two ranges with the same bytes in different
+order produce the same histogram. Distinct from the Entropy map, which the
+same underlying scan also produces, though the two are different renderings of
+different aspects of it.
+_Avoid_: frequency chart, distribution, byte counts
