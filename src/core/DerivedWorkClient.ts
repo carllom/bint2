@@ -4,6 +4,8 @@ import type {
   SearchParams,
   SearchProgressExtra,
   SearchResult,
+  StatsParams,
+  StatsResult,
 } from './DerivedWork'
 
 /**
@@ -47,6 +49,11 @@ export interface DerivedWorkClientDeps {
 }
 
 export interface SearchProgress extends SearchProgressExtra {
+  readonly percent: number
+}
+
+/** A `'stats'` job has no job-specific `extra` (ADR-0013 §2.5) — just `percent`. */
+export interface StatsProgress {
   readonly percent: number
 }
 
@@ -136,6 +143,38 @@ export class DerivedWorkClient {
   }
 
   /**
+   * The joint entropy/histogram scan (#98/#104, ADR-0012) over `params.range`.
+   * Supersedes any job currently in flight, exactly like {@link search} — jobs
+   * are mutually exclusive regardless of kind (ADR-0013 §2.4/§2.7).
+   */
+  stats(
+    params: StatsParams,
+    onProgress?: (progress: StatsProgress) => void,
+  ): DerivedWorkJobHandle<StatsResult> {
+    if (this.#closed) {
+      return { result: Promise.reject(new DerivedWorkCancelled()), cancel: () => {} }
+    }
+
+    this.#supersedeCurrent()
+
+    const reqId = String(nextReqId++)
+    const result = new Promise<StatsResult>((resolve, reject) => {
+      this.#pending.set(reqId, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        onProgress,
+      })
+    })
+
+    this.#worker.postMessage({ type: 'request', reqId, kind: 'stats', params })
+
+    return {
+      result,
+      cancel: () => this.#cancel(reqId),
+    }
+  }
+
+  /**
    * Idempotent. Cancels any in-flight job (its `result` rejects with
    * {@link DerivedWorkCancelled}) and terminates the worker.
    */
@@ -166,10 +205,10 @@ export class DerivedWorkClient {
 
     switch (message.kind) {
       case 'progress':
-        pending.onProgress?.({
-          percent: message.percent,
-          matchCount: message.extra?.matchCount ?? 0,
-        })
+        // `extra` is job-specific and optional (ADR-0013 §2.5) — spread it in
+        // only when present, so a stats job's callback sees plain `{percent}`
+        // rather than a search-shaped `matchCount` it never asked for.
+        pending.onProgress?.({ percent: message.percent, ...message.extra } as SearchProgress)
         return
       case 'cancelled':
         this.#pending.delete(message.reqId)

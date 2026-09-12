@@ -32,12 +32,15 @@ export type {
   SearchParams,
   SearchProgressExtra,
   SearchResult,
+  StatsParams,
+  StatsResult,
 } from './DerivedWork'
 export type {
   DerivedWorkClientDeps,
   DerivedWorkJobHandle,
   DerivedWorkWorkerLike,
   SearchProgress,
+  StatsProgress,
 } from './DerivedWorkClient'
 export { DerivedWorkCancelled, DerivedWorkClient, DerivedWorkError } from './DerivedWorkClient'
 export { charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'

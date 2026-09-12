@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { DerivedWorkRequestMessage, DerivedWorkResponseMessage } from '../DerivedWork'
+import type { DerivedWorkResponseMessage } from '../DerivedWork'
 import { createDerivedWorkHandler } from '../derived-work.worker'
 
 function fileWithPatternAt(size: number, pattern: number[], positions: number[]): File {
@@ -31,7 +31,9 @@ function controllableFile(size: number): { file: File; resolveNext: () => void }
   return { file, resolveNext: () => resolvers.shift()?.() }
 }
 
-function fakePost(): ReturnType<typeof vi.fn<(m: DerivedWorkResponseMessage, t?: Transferable[]) => void>> {
+function fakePost(): ReturnType<
+  typeof vi.fn<(m: DerivedWorkResponseMessage, t?: Transferable[]) => void>
+> {
   return vi.fn<(m: DerivedWorkResponseMessage, t?: Transferable[]) => void>()
 }
 
@@ -70,32 +72,68 @@ describe('createDerivedWorkHandler', () => {
     expect(resultCall).toBeDefined()
     const [message, transfer] = resultCall!
     expect(message).toMatchObject({ reqId: 'r1', kind: 'result', ok: true })
-    if (message.kind === 'result') {
+    if (message.kind === 'result' && 'matches' in message.result) {
       expect(Array.from(message.result.matches)).toEqual([3, 10])
       expect(transfer).toEqual([message.result.matches.buffer])
+    } else {
+      throw new Error('expected a search result')
     }
 
     const progressCalls = post.mock.calls.filter(([m]) => m.kind === 'progress')
     expect(progressCalls.length).toBeGreaterThan(0)
   })
 
-  it('does nothing and does not throw for the not-yet-implemented stats job kind', async () => {
+  it('runs a stats job end to end: init, progress, result with transferred buffers', async () => {
     const post = fakePost()
     const handle = createDerivedWorkHandler(post)
-    const file = fileWithPatternAt(16, [0xaa], [])
-    await handle({ type: 'init', file })
+    const bytes = new Uint8Array(32)
+    for (let i = 0; i < bytes.length; i++) bytes[i] = i & 0xff
+    const file = new File([bytes], 'stats.bin')
 
-    // 'stats' is a real DerivedWorkJobKind, just unimplemented — the request
-    // message union only types 'search' today, so cast around it here.
-    const statsRequest = {
+    await handle({ type: 'init', file })
+    await handle({
       type: 'request',
       reqId: 'r1',
       kind: 'stats',
-      params: {},
-    } as unknown as DerivedWorkRequestMessage
+      params: { range: { start: 0, end: 32 }, blockSize: 16 },
+    })
 
-    await expect(handle(statsRequest)).resolves.toBeUndefined()
-    expect(post).not.toHaveBeenCalled()
+    const resultCall = post.mock.calls.find(([message]) => message.kind === 'result')
+    expect(resultCall).toBeDefined()
+    const [message, transfer] = resultCall!
+    expect(message).toMatchObject({ reqId: 'r1', kind: 'result', ok: true })
+    if (message.kind === 'result' && 'entropy' in message.result) {
+      expect(message.result.entropy.length).toBe(2)
+      expect(message.result.histogram.length).toBe(256)
+      expect(transfer).toEqual([message.result.entropy.buffer, message.result.histogram.buffer])
+    } else {
+      throw new Error('expected a stats result')
+    }
+
+    const progressCalls = post.mock.calls.filter(([m]) => m.kind === 'progress')
+    expect(progressCalls.length).toBeGreaterThan(0)
+  })
+
+  it('acks cancellation and never posts a result for a cancelled stats job', async () => {
+    const post = fakePost()
+    const handle = createDerivedWorkHandler(post)
+    const { file, resolveNext } = controllableFile(2 * 1024 * 1024) // 2 chunks at the default 1 MiB chunk size
+
+    await handle({ type: 'init', file })
+    void handle({
+      type: 'request',
+      reqId: 'r1',
+      kind: 'stats',
+      params: { range: { start: 0, end: file.size }, blockSize: 256 },
+    })
+    void handle({ type: 'cancel', reqId: 'r1' })
+
+    resolveNext() // let chunk 0 resolve; the loop should then see the cancellation and stop
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(post).toHaveBeenCalledWith({ reqId: 'r1', kind: 'cancelled' })
+    expect(post.mock.calls.some(([m]) => m.kind === 'result')).toBe(false)
   })
 
   it('acks cancellation and never posts a result for a cancelled job, even if reads were already in flight', async () => {

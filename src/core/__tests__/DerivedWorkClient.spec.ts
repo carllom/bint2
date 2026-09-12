@@ -127,7 +127,12 @@ describe('DerivedWorkClient', () => {
     })
 
     const secondMatches = Float64Array.of(7)
-    worker.emit({ reqId: secondReqId, kind: 'result', ok: true, result: { matches: secondMatches } })
+    worker.emit({
+      reqId: secondReqId,
+      kind: 'result',
+      ok: true,
+      result: { matches: secondMatches },
+    })
     await expect(second.result).resolves.toEqual({ matches: secondMatches })
   })
 
@@ -153,6 +158,78 @@ describe('DerivedWorkClient', () => {
 
     await expect(handle.result).rejects.toBeInstanceOf(DerivedWorkCancelled)
     expect(worker.terminateCalls).toBe(1)
+  })
+
+  it('dispatches a stats job as a request message and resolves on a matching result', async () => {
+    const worker = new FakeWorker()
+    const client = new DerivedWorkClient(syntheticFile(), { createWorker: () => worker })
+
+    const handle = client.stats({ range: { start: 0, end: 16 }, blockSize: 8 })
+    const reqId = requestReqId(worker)
+    expect(worker.sent).toContainEqual({
+      type: 'request',
+      reqId,
+      kind: 'stats',
+      params: { range: { start: 0, end: 16 }, blockSize: 8 },
+    })
+
+    const entropy = Float32Array.of(1, 2)
+    const histogram = new Uint32Array(256)
+    worker.emit({ reqId, kind: 'result', ok: true, result: { entropy, histogram } })
+
+    await expect(handle.result).resolves.toEqual({ entropy, histogram })
+  })
+
+  it('a stats job supersedes an in-flight stats job: the old result rejects and the old reqId is retired', async () => {
+    const worker = new FakeWorker()
+    const client = new DerivedWorkClient(syntheticFile(), { createWorker: () => worker })
+
+    const first = client.stats({ range: { start: 0, end: 16 }, blockSize: 8 })
+    const firstReqId = requestReqId(worker, 0)
+
+    const second = client.stats({ range: { start: 0, end: 32 }, blockSize: 16 })
+    const secondReqId = requestReqId(worker, 1)
+
+    expect(firstReqId).not.toBe(secondReqId)
+    expect(worker.sent).toContainEqual({ type: 'cancel', reqId: firstReqId })
+    await expect(first.result).rejects.toBeInstanceOf(DerivedWorkCancelled)
+
+    const secondResult = { entropy: Float32Array.of(3), histogram: new Uint32Array(256) }
+    worker.emit({ reqId: secondReqId, kind: 'result', ok: true, result: secondResult })
+    await expect(second.result).resolves.toEqual(secondResult)
+  })
+
+  it('a search job supersedes an in-flight stats job, and vice versa', async () => {
+    const worker = new FakeWorker()
+    const client = new DerivedWorkClient(syntheticFile(), { createWorker: () => worker })
+
+    const statsHandle = client.stats({ range: { start: 0, end: 16 }, blockSize: 8 })
+    const statsReqId = requestReqId(worker, 0)
+
+    const searchHandle = client.search({ pattern: Uint8Array.of(0xaa) })
+    const searchReqId = requestReqId(worker, 1)
+
+    expect(worker.sent).toContainEqual({ type: 'cancel', reqId: statsReqId })
+    await expect(statsHandle.result).rejects.toBeInstanceOf(DerivedWorkCancelled)
+
+    const matches = Float64Array.of(1)
+    worker.emit({ reqId: searchReqId, kind: 'result', ok: true, result: { matches } })
+    await expect(searchHandle.result).resolves.toEqual({ matches })
+  })
+
+  it('delivers stats progress to the onProgress callback', () => {
+    const worker = new FakeWorker()
+    const client = new DerivedWorkClient(syntheticFile(), { createWorker: () => worker })
+    const progressCalls: Array<{ percent: number }> = []
+
+    client.stats({ range: { start: 0, end: 16 }, blockSize: 8 }, (progress) =>
+      progressCalls.push(progress),
+    )
+    const reqId = requestReqId(worker)
+
+    worker.emit({ reqId, kind: 'progress', percent: 0.5 })
+
+    expect(progressCalls).toEqual([{ percent: 0.5 }])
   })
 
   it('search() after close() rejects immediately instead of dispatching to the terminated worker', async () => {

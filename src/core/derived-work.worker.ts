@@ -1,5 +1,10 @@
-import type { DerivedWorkRequestMessage, DerivedWorkResponseMessage } from './DerivedWork'
+import type {
+  DerivedWorkRequestMessage,
+  DerivedWorkResponseMessage,
+  StatsParams,
+} from './DerivedWork'
 import { searchForward } from './derivedWorkSearch'
+import { computeStats } from './derivedWorkStats'
 
 /**
  * The message-handling logic behind `DerivedWorkClient` (ADR-0013). Exported
@@ -68,6 +73,39 @@ export function createDerivedWorkHandler(
     }
   }
 
+  async function runStats(reqId: string, params: StatsParams): Promise<void> {
+    if (!file) {
+      post({ reqId, kind: 'error', ok: false, code: 'read-failed', message: 'no document open' })
+      return
+    }
+    runningReqIds.add(reqId)
+    try {
+      const { result, cancelled } = await computeStats(file, params, {
+        isCancelled: () => cancelledReqIds.has(reqId),
+        onProgress: (percent) => post({ reqId, kind: 'progress', percent }),
+      })
+      if (cancelled) {
+        post({ reqId, kind: 'cancelled' })
+      } else {
+        post({ reqId, kind: 'result', ok: true, result }, [
+          result.entropy.buffer,
+          result.histogram.buffer,
+        ])
+      }
+    } catch (error) {
+      post({
+        reqId,
+        kind: 'error',
+        ok: false,
+        code: isSourceGoneError(error) ? 'source-gone' : 'read-failed',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      runningReqIds.delete(reqId)
+      cancelledReqIds.delete(reqId)
+    }
+  }
+
   return async function handle(message: DerivedWorkRequestMessage): Promise<void> {
     switch (message.type) {
       case 'init':
@@ -79,9 +117,9 @@ export function createDerivedWorkHandler(
       case 'request':
         if (message.kind === 'search') {
           await runSearch(message.reqId, message.params.pattern)
+        } else {
+          await runStats(message.reqId, message.params)
         }
-        // 'stats' is dispatched but not implemented yet — an easy follow-on
-        // slot for the entropy/histogram joint scan (#98).
         return
     }
   }

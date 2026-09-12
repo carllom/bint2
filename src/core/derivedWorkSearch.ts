@@ -1,4 +1,10 @@
 import type { SearchParams, SearchProgressExtra, SearchResult } from './DerivedWork'
+import {
+  type Bytes,
+  chunkedReadAhead,
+  DEFAULT_CHUNK_SIZE,
+  DEFAULT_READ_AHEAD_DEPTH,
+} from './derivedWorkChunkedRead'
 
 /**
  * The pure hex-byte-sequence forward scan `derived-work.worker.ts` dispatches
@@ -7,12 +13,6 @@ import type { SearchParams, SearchProgressExtra, SearchResult } from './DerivedW
  * time-budgeted yielding, both validated by issue #96's benchmark
  * (`docs/research/derived-work-scan-performance.md`).
  */
-
-/** #96 Scenario B: 1 MiB chunks were the fastest naive chunk size at scale. */
-const DEFAULT_CHUNK_SIZE = 1024 * 1024
-
-/** #96 Scenarios E/F: depth-4 lookahead captures nearly all of the win. */
-const DEFAULT_READ_AHEAD_DEPTH = 4
 
 /** #96 Scenario C: time-budgeted, not chunk-counted — the cadence self-adjusts. */
 const DEFAULT_YIELD_BUDGET_MS = 8
@@ -31,9 +31,6 @@ export interface SearchScanOutcome {
   readonly result: SearchResult
   readonly cancelled: boolean
 }
-
-/** A concretely `ArrayBuffer`-backed byte array — never `SharedArrayBuffer`. */
-type Bytes = Uint8Array<ArrayBuffer>
 
 function matchesAt(bytes: Bytes, offset: number, pattern: Uint8Array): boolean {
   for (let i = 0; i < pattern.length; i++) {
@@ -60,11 +57,6 @@ function nextCarry(carry: Bytes, bytes: Bytes, keepLen: number): Bytes {
   if (bytes.length >= keepLen) return bytes.slice(bytes.length - keepLen)
   const tail = concat(carry, bytes)
   return tail.length > keepLen ? tail.slice(tail.length - keepLen) : tail
-}
-
-async function readChunk(file: File, offset: number, length: number): Promise<Bytes> {
-  const buffer = await file.slice(offset, offset + length).arrayBuffer()
-  return new Uint8Array(buffer)
 }
 
 const defaultYieldToEventLoop = (): Promise<void> =>
@@ -99,40 +91,22 @@ export async function searchForward(
     return { result: { matches: new Float64Array(0) }, cancelled: false }
   }
 
-  // Depth-N prefetch-ahead pipeline (#96 Scenarios E/F), built directly on
-  // File.slice().arrayBuffer(): the worker reads its own File clone, never
-  // through ByteSource/PageCache (ADR-0013 §2.2).
-  const inFlight: Array<{ offset: number; bytes: Promise<Bytes> }> = []
-  let issueOffset = 0
-  const topUp = (): void => {
-    while (inFlight.length <= depth && issueOffset < size) {
-      const length = Math.min(chunkSize, size - issueOffset)
-      const bytes = readChunk(file, issueOffset, length)
-      // A chunk issued ahead of the cursor may never be consumed (cancelled,
-      // or a later chunk fails first) — subscribe a no-op catch so it can
-      // never surface as an unhandled rejection. The `await` below still
-      // sees the original rejection when it *is* consumed.
-      bytes.catch((): void => {})
-      inFlight.push({ offset: issueOffset, bytes })
-      issueOffset += length
-    }
-  }
-  topUp()
+  const chunks = chunkedReadAhead(file, 0, size, { chunkSize, readAheadDepth: depth })
 
   const keepLen = pattern.length - 1
   let carry = new Uint8Array(0)
   let lastYield = now()
   let cancelled = false
 
-  while (inFlight.length > 0) {
+  while (true) {
     if (isCancelled()) {
       cancelled = true
       break
     }
 
-    const next = inFlight.shift()!
-    const bytes = await next.bytes
-    topUp()
+    const step = await chunks.next()
+    if (step.done) break
+    const { offset, bytes } = step.value
 
     // Matches starting in the carried tail of the previous chunk: only the
     // carry plus this chunk's first `keepLen` bytes can complete one, so the
@@ -140,7 +114,7 @@ export async function searchForward(
     if (carry.length > 0) {
       const boundaryTail = bytes.subarray(0, Math.min(bytes.length, keepLen))
       const boundary = concat(carry, boundaryTail)
-      const boundaryBase = next.offset - carry.length
+      const boundaryBase = offset - carry.length
       const limit = Math.min(carry.length - 1, boundary.length - pattern.length)
       for (let i = 0; i <= limit; i++) {
         if (matchesAt(boundary, i, pattern)) {
@@ -153,13 +127,13 @@ export async function searchForward(
     const limit = bytes.length - pattern.length
     for (let i = 0; i <= limit; i++) {
       if (matchesAt(bytes, i, pattern)) {
-        matches.push(next.offset + i)
+        matches.push(offset + i)
       }
     }
 
     carry = nextCarry(carry, bytes, keepLen)
 
-    options.onProgress?.((next.offset + bytes.length) / size, { matchCount: matches.length })
+    options.onProgress?.((offset + bytes.length) / size, { matchCount: matches.length })
 
     if (now() - lastYield >= yieldBudgetMs) {
       await yieldToEventLoop()

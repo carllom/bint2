@@ -43,6 +43,27 @@ export interface SearchProgressExtra {
   readonly matchCount: number
 }
 
+/**
+ * The joint entropy/histogram scan (#98/#104, ADR-0012) — one pass over
+ * `range` produces both the per-block Shannon-entropy array and the global
+ * 256-value byte-count histogram. `range` is a half-open `[start, end)` span,
+ * the whole file or a Selection-shaped sub-range; scoping the UI feeds it
+ * from is a later ticket, so this shape is deliberately not `SelectionRange`
+ * itself — the wire protocol stays decoupled from the Selection model.
+ */
+export interface StatsParams {
+  readonly range: { readonly start: number; readonly end: number }
+  /** Bytes per entropy block — also the divisor for `ceil(range length / blockSize)`. */
+  readonly blockSize: number
+}
+
+export interface StatsResult {
+  /** Per-block Shannon entropy (0..8), one entry per `ceil(range length / blockSize)` block. */
+  readonly entropy: Float32Array
+  /** Global byte-value counts over the whole range — raw counts, not yet normalized (a UI-level concern). */
+  readonly histogram: Uint32Array
+}
+
 // ---------------------------------------------------------------------------
 // client -> worker
 // ---------------------------------------------------------------------------
@@ -60,6 +81,13 @@ export interface DerivedWorkSearchRequestMessage {
   readonly params: SearchParams
 }
 
+export interface DerivedWorkStatsRequestMessage {
+  readonly type: 'request'
+  readonly reqId: string
+  readonly kind: 'stats'
+  readonly params: StatsParams
+}
+
 /** Hard cancellation: the worker checks this between chunks and actually stops. */
 export interface DerivedWorkCancelMessage {
   readonly type: 'cancel'
@@ -69,6 +97,7 @@ export interface DerivedWorkCancelMessage {
 export type DerivedWorkRequestMessage =
   | DerivedWorkInitMessage
   | DerivedWorkSearchRequestMessage
+  | DerivedWorkStatsRequestMessage
   | DerivedWorkCancelMessage
 
 // ---------------------------------------------------------------------------
@@ -93,7 +122,7 @@ export interface DerivedWorkResultMessage {
   readonly reqId: string
   readonly kind: 'result'
   readonly ok: true
-  readonly result: SearchResult
+  readonly result: SearchResult | StatsResult
 }
 
 export interface DerivedWorkErrorMessage {
