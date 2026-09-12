@@ -55,6 +55,8 @@ export interface Preferences {
   readonly inspectorOpen: boolean
   /** The Bitmap accordion section is open (plan §3.1, §4.2). */
   readonly bitmapOpen: boolean
+  /** The Entropy accordion section is open (#107, plan §4). */
+  readonly entropyOpen: boolean
   /** The Search results accordion section is open (#106, plan §3.6). */
   readonly searchResultsOpen: boolean
   /** Inspector integer rows shown as hex rather than decimal (#54, plan §3.3). */
@@ -79,6 +81,11 @@ export interface Preferences {
   readonly bitmapZoom: number
   /** Bitmap: swap foreground / background bit values — colour only (plan §4.2). */
   readonly bitmapInvert: boolean
+  /**
+   * Entropy: bytes per block for the Map view (#107, plan §4.4) — the same
+   * role Width plays for the Bitmap. Int >= 1.
+   */
+  readonly entropyBlockSize: number
 }
 
 const DEFAULTS: Preferences = {
@@ -86,6 +93,7 @@ const DEFAULTS: Preferences = {
   sidebarWidth: 320,
   inspectorOpen: true,
   bitmapOpen: false,
+  entropyOpen: false,
   searchResultsOpen: false,
   intHex: false,
   byteOrder: 'le',
@@ -95,6 +103,7 @@ const DEFAULTS: Preferences = {
   bitmapHeight: null,
   bitmapZoom: 2,
   bitmapInvert: false,
+  entropyBlockSize: 256,
 }
 
 function isByteOrder(value: unknown): value is ByteOrder {
@@ -162,6 +171,7 @@ function loadPreferences(): Preferences {
         : DEFAULTS.sidebarWidth,
     inspectorOpen: isBoolean(stored.inspectorOpen) ? stored.inspectorOpen : DEFAULTS.inspectorOpen,
     bitmapOpen: isBoolean(stored.bitmapOpen) ? stored.bitmapOpen : DEFAULTS.bitmapOpen,
+    entropyOpen: isBoolean(stored.entropyOpen) ? stored.entropyOpen : DEFAULTS.entropyOpen,
     searchResultsOpen: isBoolean(stored.searchResultsOpen)
       ? stored.searchResultsOpen
       : DEFAULTS.searchResultsOpen,
@@ -187,6 +197,12 @@ function loadPreferences(): Preferences {
       DEFAULTS.bitmapZoom,
     ),
     bitmapInvert: isBoolean(stored.bitmapInvert) ? stored.bitmapInvert : DEFAULTS.bitmapInvert,
+    entropyBlockSize: intInRange(
+      stored.entropyBlockSize,
+      1,
+      Number.MAX_SAFE_INTEGER,
+      DEFAULTS.entropyBlockSize,
+    ),
   }
 }
 
@@ -197,6 +213,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const sidebarWidth = ref(initial.sidebarWidth)
   const inspectorOpen = ref(initial.inspectorOpen)
   const bitmapOpen = ref(initial.bitmapOpen)
+  const entropyOpen = ref(initial.entropyOpen)
   const searchResultsOpen = ref(initial.searchResultsOpen)
   const intHex = ref(initial.intHex)
   const byteOrder = ref<ByteOrder>(initial.byteOrder)
@@ -213,6 +230,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const bitmapHeight = ref<number | null>(initial.bitmapHeight)
   const bitmapZoom = ref(initial.bitmapZoom)
   const bitmapInvert = ref(initial.bitmapInvert)
+  const entropyBlockSize = ref(initial.entropyBlockSize)
 
   // One warning per session for a write failure — not one per rejected `persist()`.
   let warnedOnWrite = false
@@ -228,6 +246,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
       sidebarWidth: sidebarWidth.value,
       inspectorOpen: inspectorOpen.value,
       bitmapOpen: bitmapOpen.value,
+      entropyOpen: entropyOpen.value,
       searchResultsOpen: searchResultsOpen.value,
       intHex: intHex.value,
       byteOrder: byteOrder.value,
@@ -237,6 +256,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
       bitmapHeight: bitmapHeight.value,
       bitmapZoom: bitmapZoom.value,
       bitmapInvert: bitmapInvert.value,
+      entropyBlockSize: entropyBlockSize.value,
     }
     try {
       localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(payload))
@@ -267,6 +287,11 @@ export const usePreferencesStore = defineStore('preferences', () => {
 
   function setBitmapOpen(next: boolean): void {
     bitmapOpen.value = next
+    persist()
+  }
+
+  function setEntropyOpen(next: boolean): void {
+    entropyOpen.value = next
     persist()
   }
 
@@ -315,11 +340,17 @@ export const usePreferencesStore = defineStore('preferences', () => {
     persist()
   }
 
+  function setEntropyBlockSize(next: number): void {
+    entropyBlockSize.value = next
+    persist()
+  }
+
   return {
     sidebarCollapsed,
     sidebarWidth,
     inspectorOpen,
     bitmapOpen,
+    entropyOpen,
     searchResultsOpen,
     intHex,
     byteOrder,
@@ -330,10 +361,12 @@ export const usePreferencesStore = defineStore('preferences', () => {
     bitmapHeight,
     bitmapZoom,
     bitmapInvert,
+    entropyBlockSize,
     setSidebarCollapsed,
     setSidebarWidth,
     setInspectorOpen,
     setBitmapOpen,
+    setEntropyOpen,
     setSearchResultsOpen,
     setIntHex,
     setByteOrder,
@@ -343,5 +376,6 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setBitmapHeight,
     setBitmapZoom,
     setBitmapInvert,
+    setEntropyBlockSize,
   }
 })

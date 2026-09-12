@@ -45,6 +45,12 @@ export type {
 } from './DerivedWorkClient'
 export { DerivedWorkCancelled, DerivedWorkClient, DerivedWorkError } from './DerivedWorkClient'
 export { buildReverseTable, charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'
+export type {
+  EntropyBlockAtParams,
+  EntropyBlockRangeParams,
+  EntropyColorTheme,
+} from './entropyMap'
+export { entropyBlockAt, entropyBlockRange, entropyColor } from './entropyMap'
 export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export {

@@ -35,8 +35,8 @@ async function openBytes(bytes: number[], name = 'test.bin'): Promise<void> {
   await flushPromises()
 }
 
-/** The Search results accordion trigger — third section, after Inspector/Bitmap. */
-const searchResultsTrigger = (app: VueWrapper) => app.findAll('button.accordion-trigger')[2]!
+/** The Search results accordion trigger — fourth section, after Inspector/Bitmap/Entropy. */
+const searchResultsTrigger = (app: VueWrapper) => app.findAll('button.accordion-trigger')[3]!
 
 async function openSearchResultsSection(app: VueWrapper): Promise<void> {
   await searchResultsTrigger(app).trigger('click')
