@@ -21,12 +21,25 @@ export type DerivedWorkErrorCode = 'read-failed' | 'source-gone'
 export type DerivedWorkJobKind = 'search' | 'stats'
 
 /**
- * A hex byte-sequence, forward, whole-file scan. Text mode and Selection
- * scoping are a later ticket (#97/#100) — this ticket proves the protocol
- * end-to-end against the simplest real job.
+ * A byte-sequence, forward, whole-file scan. `pattern` is always concrete
+ * bytes — hex mode's raw input, or text mode's term converted through the
+ * Code page reverse table client-side (#105) — so the worker never needs a
+ * codepage id or a from-scratch text scan of its own. Selection scoping
+ * (#105) also never reaches this protocol: a `'search'` job always answers
+ * for the whole file, and the Find box narrows the result to the captured
+ * range locally (`scopeMatches`) rather than asking the worker to.
  */
 export interface SearchParams {
   readonly pattern: Uint8Array
+  /**
+   * Text mode's case-insensitivity (#105), default off. Folds ASCII-range
+   * letters (`0x41`–`0x5A` / `0x61`–`0x7A`) on both sides of every byte
+   * comparison — deliberately not a codepage-aware fold: the reverse table
+   * already resolved the typed term to one exact byte per character, so this
+   * only needs to blur the one case-pair distinction that matters for Latin
+   * letters, not re-derive the whole Code page inside the scan.
+   */
+  readonly caseInsensitive?: boolean
 }
 
 export interface SearchResult {

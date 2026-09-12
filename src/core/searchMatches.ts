@@ -6,7 +6,18 @@
  * whole file at once; the Find box runs the job once per term and walks the
  * result locally from here, which is also why Find Next/Previous cost nothing
  * once the first result for a term has landed.
+ *
+ * Also home to the two pure pieces text mode and Selection scoping add
+ * (#105, ticket #97's resolution): {@link parseTextPattern}, converting a
+ * typed term to bytes via a Code page's reverse table, and
+ * {@link scopeMatches}, filtering a whole-file match array down to a
+ * captured range. Both stay here rather than growing `format.ts` — that
+ * module is imported by `src/core/codepages`, so importing the reverse
+ * table back from there would cycle.
  */
+
+import { buildReverseTable } from './codepages'
+import type { CodePage } from './codepages'
 
 export type SearchDirection = 'next' | 'previous'
 
@@ -45,4 +56,60 @@ export function stepMatch(
     }
   }
   return { offset: matches[matches.length - 1]!, wrapped: true }
+}
+
+/**
+ * Text mode's term → byte pattern (#105), the counterpart to `parseHexPattern`
+ * (`format.ts`) for the other input mode. Every character must resolve
+ * through `codePage`'s reverse table ({@link buildReverseTable}) — one typed
+ * character the table can't place unambiguously (a duplicated glyph, or one
+ * that only ever renders the placeholder) makes the whole term invalid,
+ * `null`, the same "no best-effort partial parse" rule `parseHexPattern`
+ * follows. An empty term is invalid for the same reason it is in hex mode —
+ * nothing to search for.
+ */
+export function parseTextPattern(text: string, codePage: CodePage): Uint8Array | null {
+  if (text.length === 0) {
+    return null
+  }
+  const table = buildReverseTable(codePage)
+  const bytes: number[] = []
+  for (const char of text) {
+    const byte = table.get(char)
+    if (byte === undefined) {
+      return null
+    }
+    bytes.push(byte)
+  }
+  return Uint8Array.from(bytes)
+}
+
+/** A half-open byte range, as {@link scopeMatches} filters against. */
+export interface MatchScopeRange {
+  readonly start: number
+  readonly end: number
+}
+
+/**
+ * Selection scoping's capture-once filter (#105, plan §3.4): `matches` is
+ * always the *whole-file* result a `'search'` job answered with — scoping
+ * never reaches the worker (ADR-0013's protocol carries no range for
+ * `'search'`) — so "search only the Selection" is this: narrow the cached,
+ * ascending array to the range captured at the moment scope was toggled on,
+ * before `stepMatch` walks it. `range: null` (whole-file scope) is a pass-
+ * through so the Find box never special-cases the two scopes beyond calling
+ * this once. The input's ascending order is preserved.
+ */
+export function scopeMatches(matches: Float64Array, range: MatchScopeRange | null): Float64Array {
+  if (range === null) {
+    return matches
+  }
+  const scoped: number[] = []
+  for (let i = 0; i < matches.length; i++) {
+    const offset = matches[i]!
+    if (offset >= range.start && offset < range.end) {
+      scoped.push(offset)
+    }
+  }
+  return Float64Array.from(scoped)
 }

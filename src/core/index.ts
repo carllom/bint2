@@ -43,7 +43,7 @@ export type {
   StatsProgress,
 } from './DerivedWorkClient'
 export { DerivedWorkCancelled, DerivedWorkClient, DerivedWorkError } from './DerivedWorkClient'
-export { charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'
+export { buildReverseTable, charFor, CODE_PAGES, PLACEHOLDER_GLYPH } from './codepages'
 export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export {
@@ -63,8 +63,8 @@ export {
 } from './format'
 export type { DecodeOptions, InspectorRow } from './inspector'
 export { decodeInspectorRow, INSPECTOR_READ_LENGTH, INSPECTOR_ROWS } from './inspector'
-export type { MatchStep, SearchDirection } from './searchMatches'
-export { stepMatch } from './searchMatches'
+export type { MatchScopeRange, MatchStep, SearchDirection } from './searchMatches'
+export { parseTextPattern, scopeMatches, stepMatch } from './searchMatches'
 export type { Selection, SelectionRange } from './selection'
 export { cursorAt, extendTo, isCollapsed, rangeOf } from './selection'
 export type { ThumbGeometry, ViewportMetrics } from './viewport'

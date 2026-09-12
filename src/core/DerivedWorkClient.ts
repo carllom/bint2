@@ -108,12 +108,15 @@ export class DerivedWorkClient {
   }
 
   /**
-   * Hex byte-sequence, forward, whole-file search (ADR-0013; text mode and
-   * Selection scoping land in #97/#100). Supersedes any job currently in
-   * flight. Once {@link close} has run, this is a no-op whose `result`
-   * rejects immediately with {@link DerivedWorkCancelled} — mirrors
-   * `FileByteSource.read()` rejecting after `close()` (ADR-0001), except
-   * there is no live worker left to even ask.
+   * Byte-sequence, forward, whole-file search (ADR-0013). Text mode (#105)
+   * converts its term to `params.pattern` client-side via the Code page
+   * reverse table before calling this — the worker never sees a codepage id
+   * — and Selection scoping (#105) never reaches this call at all: the Find
+   * box narrows the whole-file result to the captured range itself. Supersedes
+   * any job currently in flight. Once {@link close} has run, this is a no-op
+   * whose `result` rejects immediately with {@link DerivedWorkCancelled} —
+   * mirrors `FileByteSource.read()` rejecting after `close()` (ADR-0001),
+   * except there is no live worker left to even ask.
    */
   search(
     params: SearchParams,

@@ -10,7 +10,7 @@ import type {
   DerivedWorkWorkerLike,
   SearchParams,
 } from '@/core'
-import { ByteSourceError, DerivedWorkClient, FileByteSource, toAddress } from '@/core'
+import { ByteSourceError, DerivedWorkClient, FileByteSource, toAddress, toHexString } from '@/core'
 import { derivedWorkClientFactoryKey } from '@/derivedWorkClientFactory'
 import { useDocumentStore } from '@/stores/document'
 import { usePreferencesStore } from '@/stores/preferences'
@@ -2184,6 +2184,20 @@ function resolveSearch(worker: SearchFakeWorker, reqId: string, matches: number[
   worker.emit({ reqId, kind: 'result', ok: true, result: { matches: Float64Array.from(matches) } })
 }
 
+async function setMode(app: VueWrapper, mode: 'hex' | 'text'): Promise<void> {
+  await app.find(mode === 'hex' ? '.find-box__mode-hex' : '.find-box__mode-text').trigger('click')
+}
+
+async function setScope(app: VueWrapper, scope: 'file' | 'selection'): Promise<void> {
+  await app
+    .find(scope === 'file' ? '.find-box__scope-file' : '.find-box__scope-selection')
+    .trigger('click')
+}
+
+async function setCaseSensitive(app: VueWrapper, value: boolean): Promise<void> {
+  await app.find('#find-box-case-sensitive').setValue(value)
+}
+
 describe('Find: search the whole file for a hex byte sequence (#103)', () => {
   it("'/' opens the box only while the grid has focus, closes on Esc, and returns focus to the grid", async () => {
     const { app } = mountFindApp()
@@ -2461,5 +2475,315 @@ describe('Find: search the whole file for a hex byte sequence (#103)', () => {
     resolveSearch(worker, firstReqId, [42])
     await flushPromises()
     expect(store.selection).toBeNull()
+  })
+})
+
+// --- Find: text mode (#105) -------------------------------------------------
+
+describe('Find: text mode', () => {
+  it('defaults to hex mode with the case-sensitivity toggle hidden, not disabled', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+
+    expect(app.find('.find-box__mode-hex').attributes('aria-pressed')).toBe('true')
+    expect(app.find('#find-box-case-sensitive').exists()).toBe(false)
+  })
+
+  it('switching to text mode reveals the case-sensitivity toggle, default unchecked (case-insensitive)', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+
+    await setMode(app, 'text')
+
+    expect(app.find('.find-box__mode-text').attributes('aria-pressed')).toBe('true')
+    const checkbox = app.find('#find-box-case-sensitive')
+    expect(checkbox.exists()).toBe(true)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('a term containing an unreachable glyph (".") disables Find with an inline error', async () => {
+    const { app } = mountFindApp()
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+    await setMode(app, 'text')
+
+    await typeTerm(app, 'a.b') // '.' never resolves — shared with too many placeholder bytes
+    expect((app.find('.find-box__next').element as HTMLButtonElement).disabled).toBe(true)
+    expect(app.find('#find-box-input').attributes('aria-invalid')).toBe('true')
+
+    await typeTerm(app, 'MZ')
+    expect((app.find('.find-box__next').element as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('Enter dispatches the reverse-table byte pattern, case-insensitive by default', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'MZ')
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    const reqs = sentRequests(worker)
+    expect(reqs).toHaveLength(1)
+    expect(reqs[0]!.params.pattern).toEqual(Uint8Array.of(0x4d, 0x5a))
+    expect(reqs[0]!.params.caseInsensitive).toBe(true)
+  })
+
+  it('the case-sensitive toggle turns the case-fold flag off', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await setCaseSensitive(app, true)
+    await typeTerm(app, 'MZ')
+    await pressEnter(app)
+
+    expect(sentRequests(workers[0]!)[0]!.params.caseInsensitive).toBe(false)
+  })
+
+  it('actually matches case-insensitively end to end', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    // "hello" lowercase in the file; the reader types it uppercase.
+    await openForSearch(app, [0x68, 0x65, 0x6c, 0x6c, 0x6f])
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'HELLO')
+    await pressEnter(app)
+
+    resolveSearch(workers[0]!, sentRequests(workers[0]!)[0]!.reqId, [0])
+    await flushPromises()
+
+    expect(store.selection).toEqual({ anchor: 0, focus: 0 })
+  })
+})
+
+// --- Find: pre-population from the Selection (#105) -------------------------
+
+describe('Find: pre-population from the Selection', () => {
+  it('opening with a non-collapsed Selection pre-fills the term from its bytes, hex mode', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [0x4d, 0x5a, 0x90, 0x00])
+    store.setCursor(0)
+    store.extendSelectionTo(1) // bytes [0x4D, 0x5A]
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('4D 5A')
+  })
+
+  it('pre-fills decoded via the current Code page when the box is reopened in text mode', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [0x48, 0x49, 0x21, 0x00]) // "HI!"
+    await openFind(app)
+    await setMode(app, 'text')
+    await app.find('.find-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    store.setCursor(0)
+    store.extendSelectionTo(2) // bytes 0x48, 0x49, 0x21 -> "HI!"
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('HI!')
+  })
+
+  it('caps pre-population at 16 bytes, silently truncated', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    const bytes = Array.from({ length: 20 }, (_u, i) => i)
+    await openForSearch(app, bytes)
+    store.setCursor(0)
+    store.extendSelectionTo(19) // 20 bytes selected
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe(
+      toHexString(Uint8Array.from(bytes.slice(0, 16))),
+    )
+  })
+
+  it('leaves the last-used term untouched when there is no non-collapsed Selection', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+    await typeTerm(app, '4D5A')
+    await app.find('.find-box').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    store.setCursor(2) // collapsed — the Cursor, not a Selection
+    await openFind(app)
+
+    expect((app.find('#find-box-input').element as HTMLInputElement).value).toBe('4D5A')
+  })
+})
+
+// --- Find: Selection scoping (#105) ------------------------------------------
+
+describe('Find: Selection scoping', () => {
+  it('the Selection scope toggle is disabled with no non-collapsed Selection, enabled once one exists', async () => {
+    const { app } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(app, [1, 2, 3, 4])
+    await openFind(app)
+
+    expect((app.find('.find-box__scope-selection').element as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+
+    store.setCursor(0)
+    store.extendSelectionTo(2)
+    await flushPromises()
+
+    expect((app.find('.find-box__scope-selection').element as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+  })
+
+  it('captures the Selection range once at toggle time and reuses it for every subsequent Next, even after the Cursor moves and collapses the Selection', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    const bytes = Array.from({ length: 64 }, (_u, i) => i)
+    bytes[10] = 0x2a
+    bytes[42] = 0x2a
+    bytes[60] = 0x2a // outside the Selection captured below
+    await openForSearch(app, bytes)
+    store.setCursor(5)
+    store.extendSelectionTo(50) // [5, 51) — contains the matches at 10 and 42, not 60
+    await openFind(app)
+    await setScope(app, 'selection')
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+
+    const worker = workers[0]!
+    resolveSearch(worker, sentRequests(worker)[0]!.reqId, [10, 42, 60])
+    await flushPromises()
+    // from = the live focus (50) at match time; nothing in-range is past it, so it wraps to the first.
+    expect(store.selection).toEqual({ anchor: 10, focus: 10 })
+
+    await pressEnter(app) // cached — no second job
+    expect(sentRequests(worker)).toHaveLength(1)
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+
+    // The Selection has been collapsing onto each match (setCursor's own
+    // behaviour) and is now moved further still, outside the captured range —
+    // the next Next must still only ever consider the range captured at toggle time.
+    store.setCursor(55)
+    await pressEnter(app)
+    expect(store.selection).toEqual({ anchor: 10, focus: 10 }) // wraps — nothing captured is past 55
+  })
+
+  it('re-toggling scope off then on again forces a fresh capture', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    const bytes = Array.from({ length: 64 }, (_u, i) => i)
+    bytes[10] = 0x2a
+    bytes[42] = 0x2a
+    bytes[60] = 0x2a
+    await openForSearch(app, bytes)
+    store.setCursor(5)
+    store.extendSelectionTo(50) // [5, 51)
+    await openFind(app)
+    await setScope(app, 'selection')
+
+    await setScope(app, 'file')
+    store.setCursor(40)
+    store.extendSelectionTo(63) // [40, 64) — now contains 42 and 60, not 10
+    await setScope(app, 'selection')
+
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    resolveSearch(workers[0]!, sentRequests(workers[0]!)[0]!.reqId, [10, 42, 60])
+    await flushPromises()
+
+    // from = the live focus (63); wraps to the first byte in the *new* capture.
+    expect(store.selection).toEqual({ anchor: 42, focus: 42 })
+  })
+
+  it('changing scope while a job is running cancels it', async () => {
+    const { app, workers } = mountFindApp()
+    const store = useDocumentStore(pinia)
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    store.setCursor(0)
+    store.extendSelectionTo(30)
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    await setScope(app, 'selection')
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+
+  it('changing mode while a job is running cancels it', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await typeTerm(app, '2A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    await setMode(app, 'text')
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+
+  it('changing case-sensitivity while a job is running cancels it', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    await setCaseSensitive(app, true)
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
+  })
+
+  it('changing the Code page in text mode while a job is running cancels it — the pattern is resolved through it', async () => {
+    const { app, workers } = mountFindApp()
+    await openForSearch(
+      app,
+      Array.from({ length: 64 }, (_u, i) => i),
+    )
+    await openFind(app)
+    await setMode(app, 'text')
+    await typeTerm(app, 'A')
+    await pressEnter(app)
+    const worker = workers[0]!
+    const reqId = sentRequests(worker)[0]!.reqId
+
+    usePreferencesStore(pinia).setCodePage('cp437')
+    await flushPromises()
+
+    expect(sentCancels(worker).map((c) => c.reqId)).toContain(reqId)
+    expect(app.find('.find-box__cancel').exists()).toBe(false)
   })
 })

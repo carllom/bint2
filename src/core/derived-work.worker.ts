@@ -1,6 +1,7 @@
 import type {
   DerivedWorkRequestMessage,
   DerivedWorkResponseMessage,
+  SearchParams,
   StatsParams,
 } from './DerivedWork'
 import { searchForward } from './derivedWorkSearch'
@@ -39,21 +40,17 @@ export function createDerivedWorkHandler(
   const runningReqIds = new Set<string>()
   const cancelledReqIds = new Set<string>()
 
-  async function runSearch(reqId: string, pattern: Uint8Array): Promise<void> {
+  async function runSearch(reqId: string, params: SearchParams): Promise<void> {
     if (!file) {
       post({ reqId, kind: 'error', ok: false, code: 'read-failed', message: 'no document open' })
       return
     }
     runningReqIds.add(reqId)
     try {
-      const { result, cancelled } = await searchForward(
-        file,
-        { pattern },
-        {
-          isCancelled: () => cancelledReqIds.has(reqId),
-          onProgress: (percent, extra) => post({ reqId, kind: 'progress', percent, extra }),
-        },
-      )
+      const { result, cancelled } = await searchForward(file, params, {
+        isCancelled: () => cancelledReqIds.has(reqId),
+        onProgress: (percent, extra) => post({ reqId, kind: 'progress', percent, extra }),
+      })
       if (cancelled) {
         post({ reqId, kind: 'cancelled' })
       } else {
@@ -116,7 +113,7 @@ export function createDerivedWorkHandler(
         return
       case 'request':
         if (message.kind === 'search') {
-          await runSearch(message.reqId, message.params.pattern)
+          await runSearch(message.reqId, message.params)
         } else {
           await runStats(message.reqId, message.params)
         }

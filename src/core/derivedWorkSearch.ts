@@ -32,9 +32,21 @@ export interface SearchScanOutcome {
   readonly cancelled: boolean
 }
 
-function matchesAt(bytes: Bytes, offset: number, pattern: Uint8Array): boolean {
+/** Lowercases only the ASCII letter range — see `SearchParams.caseInsensitive`. */
+function foldByte(byte: number): number {
+  return byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte
+}
+
+function matchesAt(
+  bytes: Bytes,
+  offset: number,
+  pattern: Uint8Array,
+  caseInsensitive: boolean,
+): boolean {
   for (let i = 0; i < pattern.length; i++) {
-    if (bytes[offset + i] !== pattern[i]) return false
+    const a = bytes[offset + i]!
+    const b = pattern[i]!
+    if (caseInsensitive ? foldByte(a) !== foldByte(b) : a !== b) return false
   }
   return true
 }
@@ -76,6 +88,7 @@ export async function searchForward(
   options: SearchScanOptions = {},
 ): Promise<SearchScanOutcome> {
   const pattern = params.pattern
+  const caseInsensitive = params.caseInsensitive ?? false
   const chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE
   const depth = options.readAheadDepth ?? DEFAULT_READ_AHEAD_DEPTH
   const yieldBudgetMs = options.yieldBudgetMs ?? DEFAULT_YIELD_BUDGET_MS
@@ -117,7 +130,7 @@ export async function searchForward(
       const boundaryBase = offset - carry.length
       const limit = Math.min(carry.length - 1, boundary.length - pattern.length)
       for (let i = 0; i <= limit; i++) {
-        if (matchesAt(boundary, i, pattern)) {
+        if (matchesAt(boundary, i, pattern, caseInsensitive)) {
           matches.push(boundaryBase + i)
         }
       }
@@ -126,7 +139,7 @@ export async function searchForward(
     // Matches starting within this chunk itself.
     const limit = bytes.length - pattern.length
     for (let i = 0; i <= limit; i++) {
-      if (matchesAt(bytes, i, pattern)) {
+      if (matchesAt(bytes, i, pattern, caseInsensitive)) {
         matches.push(offset + i)
       }
     }

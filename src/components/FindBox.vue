@@ -8,53 +8,105 @@ export interface FindBoxHandle {
 
 <script setup lang="ts">
 import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
-import { parseHexPattern, stepMatch } from '@/core'
-import type { DerivedWorkJobHandle, SearchDirection, SearchProgress, SearchResult } from '@/core'
+import {
+  charFor,
+  isCollapsed,
+  parseHexPattern,
+  parseTextPattern,
+  rangeOf,
+  scopeMatches,
+  stepMatch,
+  toHexString,
+} from '@/core'
+import type {
+  DerivedWorkJobHandle,
+  MatchScopeRange,
+  SearchDirection,
+  SearchProgress,
+  SearchResult,
+} from '@/core'
 import { useDocumentStore } from '@/stores/document'
+import { usePreferencesStore } from '@/stores/preferences'
 
-// Search (#103, ADR-0013, docs/plan-phase2.md §3): a transient modal Find box,
-// GotoBox-styled, opening on `/` while the grid has focus (HexViewer's own
-// onKeyDown, scoped to the row area, is what makes that true — this component
-// never listens on `window`) and closing on `Esc`. Hex mode only for this
-// ticket; the text-mode toggle and Selection scoping are later tickets
-// (#97/#100's remaining scope) and touch nothing here.
+// Search (#103/#105, ADR-0013, docs/plan-phase2.md §3): a transient modal Find
+// box, GotoBox-styled, opening on `/` while the grid has focus (HexViewer's
+// own onKeyDown, scoped to the row area, is what makes that true — this
+// component never listens on `window`) and closing on `Esc`.
 //
-// `SearchParams` (`DerivedWork.ts`) carries only a pattern — no "from offset",
-// no direction — so a `'search'` job always answers with every match in the
-// file at once. Enter/Shift+Enter dispatch that job only the first time for a
-// given term; the offsets it returns are cached here and every following
-// Next/Previous for the same term is a local, instant `stepMatch` lookup, no
-// second job. A different term supersedes whatever job is running — including
-// mid-scan — via `DerivedWorkClient.search`'s own supersession, so no explicit
-// cancel is needed on this end for that case; a same-term Next/Previous while
-// one is in flight is a no-op this component alone is responsible for, since
-// the client's supersession does not know two calls share a term.
+// `SearchParams` (`DerivedWork.ts`) carries a byte pattern (and, for text
+// mode, a case-fold flag) but no scope — a `'search'` job always answers with
+// every match in the whole file at once. Enter/Shift+Enter dispatch that job
+// only the first time for a given (pattern, case-fold) pair; the offsets it
+// returns are cached here and every following Next/Previous is a local,
+// instant lookup — `scopeMatches` first narrows the cached whole-file result
+// to the captured Selection range when scope is 'selection', then `stepMatch`
+// walks whatever remains. A different dispatch supersedes whatever job is
+// running — including mid-scan — via `DerivedWorkClient.search`'s own
+// supersession for a genuinely different (pattern, case-fold) pair; a
+// same-dispatch Next/Previous while one is in flight is a no-op this
+// component alone is responsible for, since the client's supersession does
+// not know two calls share a dispatch.
+//
+// Text mode converts the typed term to bytes *here*, via the Code page's
+// reverse table (`parseTextPattern`) — the worker never sees a codepage id.
+// Case-insensitivity is not "try every case variant of the reverse-table
+// byte": it folds ASCII letter case at compare time inside the scan itself
+// (`SearchParams.caseInsensitive`), so the byte the reverse table resolved
+// stays the one dispatched regardless of the toggle.
 
 const emit = defineEmits<{ close: [] }>()
 
 const documentStore = useDocumentStore()
+const preferencesStore = usePreferencesStore()
 
 const open = ref(false)
-// Persists across close -> reopen for the session (plan §3.1, boundary
-// matrix): never reset except by a document change, below.
+// Term, mode, case-sensitivity and scope all persist across close -> reopen
+// for the session (plan §3.1, boundary matrix): never reset except by a
+// document change, below.
 const text = ref('')
+const mode = ref<'hex' | 'text'>('hex')
+// Text mode only, default case-insensitive (plan §3.2); meaningless — and
+// hidden, not disabled — in hex mode.
+const caseSensitive = ref(false)
+const scope = ref<'file' | 'selection'>('file')
+// Set only while `scope === 'selection'`, captured once at the moment scope
+// toggles on (plan §3.4) — see `setScope`. Kept in lockstep with `scope`
+// rather than derived from it, since deriving it from the *live* Selection
+// would defeat the entire point: every subsequent Next/Previous must reuse
+// this exact range even after the Selection moves or collapses.
+const capturedRange = ref<MatchScopeRange | null>(null)
 const dialogEl = useTemplateRef<HTMLElement>('dialog')
 const inputEl = useTemplateRef<HTMLInputElement>('input')
 
-const pattern = computed(() => parseHexPattern(text.value))
+const pattern = computed(() =>
+  mode.value === 'hex'
+    ? parseHexPattern(text.value)
+    : parseTextPattern(text.value, preferencesStore.codePage),
+)
 const invalid = computed(() => text.value.trim() !== '' && pattern.value === null)
-// `parseHexPattern` never returns a non-null empty array (an empty term is
-// itself invalid, `null`), so `pattern.value !== null` alone already implies
-// at least one byte.
+// Neither `parseHexPattern` nor `parseTextPattern` ever returns a non-null
+// empty array (an empty term is itself invalid, `null`), so `pattern.value
+// !== null` alone already implies at least one byte.
 const canFind = computed(() => pattern.value !== null)
+
+/** Text mode only (hex mode has no case concept) — `SearchParams.caseInsensitive`. */
+const caseInsensitive = computed(() => mode.value === 'text' && !caseSensitive.value)
+
+/** "Selection" scope is disabled, not hidden, with nothing non-collapsed marked (plan §3.4). */
+const scopeSelectionDisabled = computed(() => {
+  const sel = documentStore.selection
+  return sel === null || isCollapsed(sel)
+})
 
 interface MatchCache {
   readonly pattern: Uint8Array
+  readonly caseInsensitive: boolean
   readonly matches: Float64Array
 }
 interface RunningJob {
   readonly handle: DerivedWorkJobHandle<SearchResult>
   readonly pattern: Uint8Array
+  readonly caseInsensitive: boolean
 }
 
 // The last *completed* scan, cached against the exact pattern bytes it answers
@@ -73,7 +125,9 @@ const statusMessage = ref<string | null>(null)
 
 const statusText = computed(() => {
   if (invalid.value) {
-    return 'Enter a valid hex byte sequence — pairs of hex digits.'
+    return mode.value === 'hex'
+      ? 'Enter a valid hex byte sequence — pairs of hex digits.'
+      : 'Every character must resolve to one unambiguous byte in the current Code page.'
   }
   if (pending.value) {
     return `Searching… ${Math.round(progressPercent.value * 100)}%`
@@ -116,14 +170,37 @@ function applyMatch(
     : null
 }
 
+/**
+ * Whole-file matches, narrowed to the captured Selection range when scope is
+ * 'selection' (plan §3.4) — `capturedRange` never reflects the *live*
+ * Selection, only whatever it was at the moment scope was last toggled on.
+ */
 function runFrom(matches: Float64Array, direction: SearchDirection): void {
-  applyMatch(stepMatch(matches, currentOffset(), direction), direction)
+  const range = scope.value === 'selection' ? capturedRange.value : null
+  applyMatch(stepMatch(scopeMatches(matches, range), currentOffset(), direction), direction)
 }
 
 function cancelPending(): void {
   job?.handle.cancel()
   job = null
   pending.value = false
+}
+
+/** Toggle whole-file / Selection scope. Capturing happens only here — see the field doc above. */
+function setScope(next: 'file' | 'selection'): void {
+  if (next === scope.value) {
+    return
+  }
+  if (next === 'selection') {
+    const sel = documentStore.selection
+    if (sel === null || isCollapsed(sel)) {
+      return // the button is disabled for this case, but guard it anyway
+    }
+    capturedRange.value = rangeOf(sel)
+  } else {
+    capturedRange.value = null
+  }
+  scope.value = next
 }
 
 /**
@@ -136,16 +213,22 @@ function find(direction: SearchDirection): void {
   if (p === null) {
     return
   }
+  const ci = caseInsensitive.value
 
-  // Cached result for this exact term: step through it locally, no dispatch.
-  if (cache.value !== null && sameBytes(cache.value.pattern, p)) {
+  // Cached result for this exact (pattern, case-fold) pair: step through it
+  // locally, no dispatch.
+  if (
+    cache.value !== null &&
+    sameBytes(cache.value.pattern, p) &&
+    cache.value.caseInsensitive === ci
+  ) {
     runFrom(cache.value.matches, direction)
     return
   }
 
-  // Same-term Next/Previous while a job for it is already in flight — a no-op
-  // (ADR-0013 §2.7): it never queues, never cancels itself.
-  if (pending.value && job !== null && sameBytes(job.pattern, p)) {
+  // Same-dispatch Next/Previous while a job for it is already in flight — a
+  // no-op (ADR-0013 §2.7): it never queues, never cancels itself.
+  if (pending.value && job !== null && sameBytes(job.pattern, p) && job.caseInsensitive === ci) {
     return
   }
 
@@ -154,23 +237,23 @@ function find(direction: SearchDirection): void {
     return // no document / no worker-crossing client — nothing to dispatch to
   }
 
-  // A different term reaches here while another job is running: `search()`
-  // below supersedes it on its own (DerivedWorkClient's own cancel-on-new-job
-  // rule), so nothing extra is cancelled here.
+  // A different dispatch reaches here while another job is running:
+  // `search()` below supersedes it on its own (DerivedWorkClient's own
+  // cancel-on-new-job rule), so nothing extra is cancelled here.
   statusMessage.value = null
   pending.value = true
   progressPercent.value = 0
-  const handle = client.search({ pattern: p }, (progress: SearchProgress) => {
+  const handle = client.search({ pattern: p, caseInsensitive: ci }, (progress: SearchProgress) => {
     progressPercent.value = progress.percent
   })
-  job = { handle, pattern: p }
+  job = { handle, pattern: p, caseInsensitive: ci }
 
   handle.result
     .then((result: SearchResult) => {
       if (job?.handle !== handle) {
         return // superseded/cancelled before this landed
       }
-      cache.value = { pattern: p, matches: result.matches }
+      cache.value = { pattern: p, caseInsensitive: ci, matches: result.matches }
       pending.value = false
       job = null
       runFrom(result.matches, direction)
@@ -191,6 +274,43 @@ function cancel(): void {
   cancelPending()
 }
 
+/**
+ * The Selection's bytes, mode-decoded and capped at 16 bytes (plan §3.1) —
+ * silent truncation, same as everywhere else this cap applies. `readSync`
+ * only: a resident Selection is the overwhelmingly common case (the reader
+ * just interacted with it), and a non-resident one simply leaves the
+ * last-used term in place rather than adding an async read to box-opening.
+ *
+ * Text mode decodes through `charFor` exactly as ticket #97 resolved it — a
+ * forward decode, not a reverse-table-safe re-encoding — so a Selection
+ * containing an unmapped/control byte can pre-fill a term `parseTextPattern`
+ * then rejects (its glyph is the shared placeholder). That is accepted, not
+ * fixed here: the alternative is inventing a *different* rendering than what
+ * the char column itself shows for those bytes, and the inline validation
+ * error already says what to do next.
+ */
+function populateFromSelection(): void {
+  const sel = documentStore.selection
+  const src = documentStore.source
+  if (sel === null || isCollapsed(sel) || src === null) {
+    return
+  }
+  const { start, end } = rangeOf(sel)
+  const bytes = src.readSync(start, Math.min(end - start, 16))
+  if (bytes === null) {
+    return
+  }
+  if (mode.value === 'hex') {
+    text.value = toHexString(bytes)
+    return
+  }
+  let glyphs = ''
+  for (let i = 0; i < bytes.length; i++) {
+    glyphs += charFor(bytes[i]!, preferencesStore.codePage)
+  }
+  text.value = glyphs
+}
+
 async function reveal(): Promise<void> {
   if (open.value) {
     inputEl.value?.focus()
@@ -199,6 +319,7 @@ async function reveal(): Promise<void> {
   }
   open.value = true
   statusMessage.value = null
+  populateFromSelection()
   await nextTick()
   inputEl.value?.focus()
   inputEl.value?.select()
@@ -257,9 +378,10 @@ function onFocusout(event: FocusEvent): void {
 // A new (or closed) document invalidates everything the previous one's scan
 // produced — a match offset means nothing against different bytes — and its
 // DerivedWorkClient is gone with it (the store already terminated the
-// worker). The term itself resets too: it persists close -> reopen *within a
-// document* (plan §3.1), not across an unrelated file the reader has since
-// opened. Closed the same way a newly opened document supersedes GotoBox.
+// worker). Term, mode, case-sensitivity and scope all reset too: they persist
+// close -> reopen *within a document* (plan §3.1), not across an unrelated
+// file the reader has since opened. Closed the same way a newly opened
+// document supersedes GotoBox.
 watch(
   () => documentStore.source,
   () => {
@@ -267,21 +389,42 @@ watch(
     cache.value = null
     statusMessage.value = null
     text.value = ''
+    mode.value = 'hex'
+    caseSensitive.value = false
+    scope.value = 'file'
+    capturedRange.value = null
     open.value = false
   },
 )
 
 // "Any change to term... while a job is running cancels it" (plan §3.4): a
-// same-term Next/Previous while pending is a no-op (handled in `find`), but
-// editing the term *itself* mid-scan — without pressing Enter/Shift+Enter
+// same-dispatch Next/Previous while pending is a no-op (handled in `find`),
+// but editing the term *itself* mid-scan — without pressing Enter/Shift+Enter
 // again — must not let that stale in-flight job land and move the Cursor for
 // a term the box no longer shows.
 watch(text, () => {
   if (
     pending.value &&
     job !== null &&
-    (pattern.value === null || !sameBytes(job.pattern, pattern.value))
+    (pattern.value === null ||
+      !sameBytes(job.pattern, pattern.value) ||
+      job.caseInsensitive !== caseInsensitive.value)
   ) {
+    cancelPending()
+  }
+})
+
+// Mode, case-sensitivity and scope are discrete toggles, not per-keystroke
+// noise — "any change to ... mode, case-sensitivity, or scope while a job is
+// running cancels it" (plan §3.4) applies unconditionally to each, unlike the
+// term watch above which only cancels when the dispatch actually differs.
+// The Code page joins this list too, even though it is set from Preferences,
+// not this box: in text mode it is as much a part of "the term" as the
+// characters themselves (`pattern` re-resolves through it), so changing it
+// mid-scan must not let a job dispatched under the old Code page land as if
+// it still matched what the box now shows.
+watch([mode, caseSensitive, scope, () => preferencesStore.codePage], () => {
+  if (pending.value) {
     cancelPending()
   }
 })
@@ -302,7 +445,9 @@ defineExpose({ reveal } satisfies FindBoxHandle)
       @focusout="onFocusout"
     >
       <div class="find-box__row">
-        <label class="find-box__label" for="find-box-input">Find (hex)</label>
+        <label class="find-box__label" for="find-box-input"
+          >Find ({{ mode === 'hex' ? 'hex' : 'text' }})</label
+        >
         <input
           id="find-box-input"
           ref="input"
@@ -311,7 +456,7 @@ defineExpose({ reveal } satisfies FindBoxHandle)
           type="text"
           autocomplete="off"
           spellcheck="false"
-          placeholder="4D 5A"
+          :placeholder="mode === 'hex' ? '4D 5A' : 'MZ'"
           :aria-invalid="invalid || undefined"
           aria-describedby="find-box-status"
         />
@@ -330,6 +475,58 @@ defineExpose({ reveal } satisfies FindBoxHandle)
           Cancel
         </button>
         <button type="button" class="find-box__close" @click="close">Close</button>
+      </div>
+      <div class="find-box__row find-box__options">
+        <span class="find-box__group" role="group" aria-label="Input mode">
+          <button
+            type="button"
+            class="find-box__mode-hex"
+            :aria-pressed="mode === 'hex'"
+            :class="{ 'find-box__toggle--active': mode === 'hex' }"
+            @click="mode = 'hex'"
+          >
+            Hex
+          </button>
+          <button
+            type="button"
+            class="find-box__mode-text"
+            :aria-pressed="mode === 'text'"
+            :class="{ 'find-box__toggle--active': mode === 'text' }"
+            @click="mode = 'text'"
+          >
+            Text
+          </button>
+        </span>
+        <label v-if="mode === 'text'" class="find-box__case-sensitive-label">
+          <input
+            id="find-box-case-sensitive"
+            v-model="caseSensitive"
+            type="checkbox"
+            class="find-box__case-sensitive"
+          />
+          Case-sensitive
+        </label>
+        <span class="find-box__group" role="group" aria-label="Search scope">
+          <button
+            type="button"
+            class="find-box__scope-file"
+            :aria-pressed="scope === 'file'"
+            :class="{ 'find-box__toggle--active': scope === 'file' }"
+            @click="setScope('file')"
+          >
+            Whole file
+          </button>
+          <button
+            type="button"
+            class="find-box__scope-selection"
+            :aria-pressed="scope === 'selection'"
+            :class="{ 'find-box__toggle--active': scope === 'selection' }"
+            :disabled="scopeSelectionDisabled"
+            @click="setScope('selection')"
+          >
+            Selection
+          </button>
+        </span>
       </div>
       <p
         id="find-box-status"
@@ -393,7 +590,11 @@ defineExpose({ reveal } satisfies FindBoxHandle)
 .find-box__next,
 .find-box__previous,
 .find-box__cancel,
-.find-box__close {
+.find-box__close,
+.find-box__mode-hex,
+.find-box__mode-text,
+.find-box__scope-file,
+.find-box__scope-selection {
   padding: 0.15rem 0.6rem;
   background: var(--color-bg);
   color: var(--color-fg);
@@ -404,9 +605,42 @@ defineExpose({ reveal } satisfies FindBoxHandle)
 }
 
 .find-box__next:disabled,
-.find-box__previous:disabled {
+.find-box__previous:disabled,
+.find-box__scope-selection:disabled {
   color: var(--color-fg-dim);
   cursor: default;
+}
+
+.find-box__options {
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.9em;
+}
+
+.find-box__group {
+  display: inline-flex;
+  gap: 1px;
+}
+
+.find-box__group .find-box__mode-hex,
+.find-box__group .find-box__scope-file {
+  border-radius: 3px 0 0 3px;
+}
+
+.find-box__group .find-box__mode-text,
+.find-box__group .find-box__scope-selection {
+  border-radius: 0 3px 3px 0;
+}
+
+.find-box__toggle--active {
+  background: var(--color-border);
+}
+
+.find-box__case-sensitive-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35ch;
+  color: var(--color-fg-dim);
 }
 
 .find-box__status {

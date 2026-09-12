@@ -158,4 +158,32 @@ describe('searchForward', () => {
       searchForward(goneFile(64), { pattern: Uint8Array.of(0xaa) }, { chunkSize: 16 }),
     ).rejects.toBeInstanceOf(DOMException)
   })
+
+  describe('caseInsensitive (#105)', () => {
+    it('is exact by default — a differently-cased byte never matches', async () => {
+      const file = new File([Uint8Array.from([0x68, 0x65, 0x6c, 0x6c, 0x6f])], 'text.bin') // "hello"
+      const { result } = await searchForward(file, {
+        pattern: Uint8Array.from([0x48, 0x45, 0x4c, 0x4c, 0x4f]), // "HELLO"
+      })
+      expect(Array.from(result.matches)).toEqual([])
+    })
+
+    it('folds ASCII letter case on both sides when set', async () => {
+      const file = new File([Uint8Array.from([0x68, 0x65, 0x6c, 0x6c, 0x6f])], 'text.bin') // "hello"
+      const { result } = await searchForward(file, {
+        pattern: Uint8Array.from([0x48, 0x45, 0x4c, 0x4c, 0x4f]), // "HELLO"
+        caseInsensitive: true,
+      })
+      expect(Array.from(result.matches)).toEqual([0])
+    })
+
+    it('never folds non-letter bytes — a digit or symbol still matches exactly', async () => {
+      const file = new File([Uint8Array.from([0x31, 0x21])], 'text.bin') // "1!"
+      const { result } = await searchForward(file, {
+        pattern: Uint8Array.from([0x31, 0x21]),
+        caseInsensitive: true,
+      })
+      expect(Array.from(result.matches)).toEqual([0])
+    })
+  })
 })
