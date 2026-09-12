@@ -8,6 +8,7 @@ import type { DerivedWorkResponseMessage, DerivedWorkWorkerLike } from '@/core'
 import { useDocumentStore } from '@/stores/document'
 import { PREFERENCES_STORAGE_KEY, usePreferencesStore } from '@/stores/preferences'
 import { useEntropyStore } from '@/stores/entropy'
+import EntropyPanel from '@/components/EntropyPanel.vue'
 import HomeView from '@/views/HomeView.vue'
 
 // The Entropy Panel's Map view (#107, CONTEXT.md, ADR-0012,
@@ -265,7 +266,7 @@ describe('the Entropy Panel — Compute/Cancel dispatch (plan §4.2)', () => {
     expect(statsRequests(worker)).toHaveLength(0)
   })
 
-  it('shows the Histogram placeholder without affecting a computed Map result', async () => {
+  it('shows the Histogram bar chart without affecting a computed Map result', async () => {
     const app = mountApp()
     const worker = await openWithWorker(Array.from({ length: 32 }, (_u, i) => i))
     await openEntropySection(app)
@@ -280,11 +281,94 @@ describe('the Entropy Panel — Compute/Cancel dispatch (plan §4.2)', () => {
     await flushPromises()
 
     await app.find('.entropy__mode-histogram').trigger('click')
-    expect(app.find('[data-field="entropy-histogram-placeholder"]').exists()).toBe(true)
+    expect(app.find('[data-field="entropy-histogram-canvas"]').exists()).toBe(true)
     expect(app.find('[data-field="entropy-canvas"]').exists()).toBe(false)
 
     await app.find('.entropy__mode-map').trigger('click')
     expect(app.find('[data-field="entropy-canvas"]').exists()).toBe(true)
+    expect(app.find('[data-field="entropy-histogram-canvas"]').exists()).toBe(false)
+  })
+})
+
+describe('the Entropy Panel — Byte histogram (#108, plan §4.5)', () => {
+  /** Computes over a fixed 4-byte file whose histogram is hand-known: byte 0x41 x3, 0x42 x1. */
+  async function computeKnownDistribution(app: VueWrapper): Promise<FakeWorker> {
+    const worker = await openWithWorker([0x41, 0x41, 0x41, 0x42])
+    await openEntropySection(app)
+    await computeButton(app).trigger('click')
+    const reqId = statsRequests(worker)[0]!.reqId
+    const histogram = new Uint32Array(256)
+    histogram[0x41] = 3
+    histogram[0x42] = 1
+    worker.emit({
+      reqId,
+      kind: 'result',
+      ok: true,
+      result: { entropy: Float32Array.of(1), histogram },
+    })
+    await flushPromises()
+    await app.find('.entropy__mode-histogram').trigger('click')
+    return worker
+  }
+
+  it('never dispatches a new Compute job when toggling Map <-> Histogram', async () => {
+    const app = mountApp()
+    const worker = await computeKnownDistribution(app)
+    expect(statsRequests(worker)).toHaveLength(1)
+
+    await app.find('.entropy__mode-map').trigger('click')
+    await app.find('.entropy__mode-histogram').trigger('click')
+
+    expect(statsRequests(worker)).toHaveLength(1) // still just the one Compute
+  })
+
+  it('normalizes bar heights against the range\'s own max frequency', async () => {
+    const app = mountApp()
+    await computeKnownDistribution(app)
+
+    const frequencies = (app.findComponent(EntropyPanel).vm as unknown as { frequencies: Float64Array })
+      .frequencies!
+    expect(frequencies[0x41]).toBeCloseTo(0.75)
+    expect(frequencies[0x42]).toBeCloseTo(0.25)
+    expect(frequencies[0x00]).toBe(0)
+  })
+
+  it('is marked stale in Histogram mode too when scope/block-size drifts, exactly like the Map (plan §4.3)', async () => {
+    const app = mountApp()
+    const worker = await computeKnownDistribution(app)
+    expect(app.find('.entropy__histogram--stale').exists()).toBe(false)
+
+    await app.find('[data-field="entropy-block-size"]').setValue(128)
+
+    expect(app.find('[data-field="entropy-status"]').text()).toMatch(/stale/i)
+    expect(app.find('.entropy__histogram--stale').exists()).toBe(true)
+    expect(app.find('[data-field="entropy-histogram-canvas"]').exists()).toBe(true) // not cleared
+    expect(statsRequests(worker)).toHaveLength(1) // still no auto-recompute
+  })
+
+  it('hovering a bar shows a tooltip with its count/percentage; clicking does nothing beyond that', async () => {
+    const app = mountApp()
+    await computeKnownDistribution(app)
+    const store = useDocumentStore(pinia)
+    const cv = app.find('[data-field="entropy-histogram-canvas"]')
+    Object.defineProperty(cv.element, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, right: 256, bottom: 64, width: 256, height: 64, x: 0, y: 0, toJSON() {} }),
+    })
+
+    // 256px wide, 256 bars -> byte 0x41 (65) owns x in [65, 66).
+    await cv.trigger('pointermove', { clientX: 65.5, clientY: 10 })
+    const tooltip = app.find('[data-field="entropy-histogram-tooltip"]')
+    expect(tooltip.exists()).toBe(true)
+    expect(tooltip.text()).toContain('0x41')
+    expect(tooltip.text()).toContain('3')
+    expect(tooltip.text()).toContain('75')
+
+    await cv.trigger('pointerdown', { button: 0, clientX: 65.5, clientY: 10 })
+    expect(store.selection).toBeNull() // no click-to-cursor
+
+    await cv.trigger('pointerleave')
+    expect(app.find('[data-field="entropy-histogram-tooltip"]').exists()).toBe(false)
   })
 })
 

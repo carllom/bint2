@@ -1,17 +1,26 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, useTemplateRef, watch } from 'vue'
-import { entropyBlockAt, entropyBlockRange, entropyColor, isCollapsed, rangeOf } from '@/core'
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
+import {
+  barHeight,
+  entropyBlockAt,
+  entropyBlockRange,
+  entropyColor,
+  histogramFrequencies,
+  isCollapsed,
+  maxFrequency,
+  rangeOf,
+  toHex,
+} from '@/core'
 import type { EntropyColorTheme } from '@/core'
 import { useDocumentStore } from '@/stores/document'
 import { useEntropyStore, type EntropyScope } from '@/stores/entropy'
 import { usePreferencesStore } from '@/stores/preferences'
 
-// The Entropy Panel's Map view (#107, CONTEXT.md's Entropy map / Byte
-// histogram, ADR-0012, plan-phase2.md §4). The Histogram half of the mode
-// toggle is a placeholder here — it renders from the same `result` this
-// ticket populates, but its own bar-chart rendering is a follow-on ticket
-// (ADR-0012's whole point: one Panel, one Compute, two renderings that land
-// together).
+// The Entropy Panel's Map and Histogram views (#107/#108, CONTEXT.md's
+// Entropy map / Byte histogram, ADR-0012, plan-phase2.md §4). A pure
+// view-swap over one computed result (ADR-0012's whole point: one Panel, one
+// Compute, two renderings that land together) — the toggle never retriggers
+// Compute.
 //
 // State lives in `useEntropyStore` (mode, scope, the last completed
 // `StatsResult`, staleness inputs, the in-flight job) because the section is
@@ -134,17 +143,109 @@ function paint(): void {
   }
 }
 
-const repaintOnThemeChange = (): void => paint()
+// ── Histogram rendering (plan §4.5) ────────────────────────────────────────
+// A bespoke bar chart, one canvas column per byte value (always 256 — the
+// alphabet size, unlike the Map's `numBlocks`), height scaled to the range's
+// own max frequency rather than a fixed 0-100% axis (`histogramFrequencies`/
+// `maxFrequency`/`barHeight`, `src/core/histogram.ts`). No positional axis
+// and no click-to-cursor (ADR-0012/plan §4.5) — hovering a bar only shows a
+// tooltip.
+
+const HISTOGRAM_BARS = 256
+const HISTOGRAM_HEIGHT = 64
+
+const frequencies = computed(() =>
+  entropy.result !== null ? histogramFrequencies(entropy.result.histogram) : null,
+)
+
+const histogramCanvas = useTemplateRef<HTMLCanvasElement>('histogramCanvas')
+
+/** Mirrors the Map's thermal gradient in spirit but stays a single accent color — a bar chart has no scalar to color by. */
+function histogramBarColor(theme: EntropyColorTheme): string {
+  return theme === 'dark' ? '#6ea9ff' : '#0067c0'
+}
+
+function paintHistogram(): void {
+  const cv = histogramCanvas.value
+  const freqs = frequencies.value
+  if (cv === null || freqs === null) {
+    return
+  }
+  const ctx = cv.getContext('2d')
+  if (ctx === null) {
+    return
+  }
+  ctx.clearRect(0, 0, cv.width, cv.height)
+  const theme: EntropyColorTheme = darkQuery?.matches === false ? 'light' : 'dark'
+  ctx.fillStyle = histogramBarColor(theme)
+  const max = maxFrequency(freqs)
+  for (let byte = 0; byte < freqs.length; byte++) {
+    const h = barHeight(freqs[byte]!, max) * HISTOGRAM_HEIGHT
+    if (h > 0) {
+      ctx.fillRect(byte, HISTOGRAM_HEIGHT - h, 1, h)
+    }
+  }
+}
+
+interface HistogramTooltip {
+  readonly x: number
+  readonly y: number
+  readonly text: string
+}
+
+const histogramTooltip = ref<HistogramTooltip | null>(null)
+
+/** Hover-only (plan §4.5): shows the hovered byte value's count/percentage. Clicking does nothing beyond this. */
+function onHistogramPointerMove(event: PointerEvent): void {
+  const cv = histogramCanvas.value
+  const result = entropy.result
+  const freqs = frequencies.value
+  if (cv === null || result === null || freqs === null) {
+    histogramTooltip.value = null
+    return
+  }
+  const rect = cv.getBoundingClientRect()
+  const byte = entropyBlockAt({
+    x: event.clientX - rect.left,
+    displayWidth: rect.width,
+    numBlocks: HISTOGRAM_BARS,
+  })
+  if (byte === null) {
+    histogramTooltip.value = null
+    return
+  }
+  const count = result.histogram[byte]!
+  const percent = freqs[byte]! * 100
+  histogramTooltip.value = {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+    text: `0x${toHex(byte)} — ${count.toLocaleString()} (${percent.toFixed(2)}%)`,
+  }
+}
+
+function onHistogramPointerLeave(): void {
+  histogramTooltip.value = null
+}
+
+const repaintOnThemeChange = (): void => {
+  paint()
+  paintHistogram()
+}
 
 watch(
-  () => entropy.result,
-  () => paint(),
+  [() => entropy.result, () => entropy.mode],
+  () => {
+    histogramTooltip.value = null
+    paint()
+    paintHistogram()
+  },
   { flush: 'post' },
 )
 
 onMounted(() => {
   darkQuery?.addEventListener('change', repaintOnThemeChange)
   paint()
+  paintHistogram()
 })
 
 onBeforeUnmount(() => {
@@ -190,9 +291,10 @@ function onCanvasPointerDown(event: PointerEvent): void {
   documentStore.requestReveal(range.start)
 }
 
-// Test seam — `numBlocks`/`stale`/`effectiveRange` are not otherwise
-// observable from the DOM alone (the canvas paints happy-dom can't read back).
-defineExpose({ numBlocks, stale, effectiveRange })
+// Test seam — `numBlocks`/`stale`/`effectiveRange`/`frequencies` are not
+// otherwise observable from the DOM alone (the canvas paints happy-dom can't
+// read back).
+defineExpose({ numBlocks, stale, effectiveRange, frequencies })
 </script>
 
 <template>
@@ -282,11 +384,11 @@ defineExpose({ numBlocks, stale, effectiveRange })
       {{ statusText }}
     </p>
 
-    <template v-if="entropy.mode === 'map'">
-      <p v-if="entropy.result === null" class="entropy__hint" data-field="entropy-no-result">
-        No result yet — Compute to scan the file.
-      </p>
-      <div v-else class="entropy__map" :class="{ 'entropy__map--stale': stale }">
+    <p v-if="entropy.result === null" class="entropy__hint" data-field="entropy-no-result">
+      No result yet — Compute to scan the file.
+    </p>
+    <template v-else-if="entropy.mode === 'map'">
+      <div class="entropy__map" :class="{ 'entropy__map--stale': stale }">
         <canvas
           ref="canvas"
           class="entropy__canvas"
@@ -298,9 +400,26 @@ defineExpose({ numBlocks, stale, effectiveRange })
         ></canvas>
       </div>
     </template>
-    <p v-else class="entropy__hint" data-field="entropy-histogram-placeholder">
-      Byte histogram — coming in a later ticket.
-    </p>
+    <div v-else class="entropy__histogram" :class="{ 'entropy__histogram--stale': stale }">
+      <canvas
+        ref="histogramCanvas"
+        class="entropy__canvas"
+        data-field="entropy-histogram-canvas"
+        aria-hidden="true"
+        :width="HISTOGRAM_BARS"
+        :height="HISTOGRAM_HEIGHT"
+        @pointermove="onHistogramPointerMove"
+        @pointerleave="onHistogramPointerLeave"
+      ></canvas>
+      <div
+        v-if="histogramTooltip"
+        class="entropy__tooltip"
+        data-field="entropy-histogram-tooltip"
+        :style="{ left: `${histogramTooltip.x}px`, top: `${histogramTooltip.y}px` }"
+      >
+        {{ histogramTooltip.text }}
+      </div>
+    </div>
   </div>
 </template>
 
@@ -412,5 +531,30 @@ defineExpose({ numBlocks, stale, effectiveRange })
   height: 32px;
   image-rendering: pixelated;
   background: var(--color-bg);
+}
+
+.entropy__histogram {
+  position: relative;
+  width: 100%;
+}
+
+.entropy__histogram--stale {
+  opacity: 0.55;
+}
+
+.entropy__histogram .entropy__canvas {
+  height: 64px;
+}
+
+.entropy__tooltip {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 0.15rem 0.5ch;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  font-size: 0.85em;
+  white-space: nowrap;
+  pointer-events: none;
 }
 </style>

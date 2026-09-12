@@ -51,6 +51,8 @@ export type {
   EntropyColorTheme,
 } from './entropyMap'
 export { entropyBlockAt, entropyBlockRange, entropyColor } from './entropyMap'
+export type { HistogramFrequencies } from './histogram'
+export { barHeight, histogramFrequencies, maxFrequency } from './histogram'
 export { PageCache } from './PageCache'
 export type { FetchRange, PageCacheDeps, PageCacheOptions, PageCacheStats } from './PageCache'
 export {

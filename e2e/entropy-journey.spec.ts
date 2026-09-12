@@ -47,4 +47,17 @@ test('Entropy Panel: Compute renders the heatmap strip, and clicking a block mov
   await page.mouse.click(box.x + 1, box.y + box.height / 2)
 
   await expect(cursorOffset).toContainText('0x00')
+
+  // Toggle to Histogram (#108): the same computed result, no new Compute —
+  // hovering a bar shows a tooltip, and the Cursor from the click above is
+  // left untouched.
+  await page.getByRole('button', { name: 'Histogram', exact: true }).click()
+  const histogramCanvas = page.locator('[data-field="entropy-histogram-canvas"]')
+  await expect(histogramCanvas).toBeVisible()
+  await expect(canvas).toHaveCount(0)
+
+  const histogramBox = (await histogramCanvas.boundingBox())!
+  await page.mouse.move(histogramBox.x + histogramBox.width / 2, histogramBox.y + histogramBox.height / 2)
+  await expect(page.locator('[data-field="entropy-histogram-tooltip"]')).toBeVisible()
+  await expect(cursorOffset).toContainText('0x00') // hover only — no click-to-cursor
 })
